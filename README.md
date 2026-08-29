@@ -29,6 +29,11 @@ but does not depend on it.
   detail normals), rigging control surfaces, gotchas. Registered at editor start; re-read with the
   console command `Vibe3D.ReloadSkills`.
 - `get_dynamic_mesh(handle)` hands the mesh to any `unreal.GeometryScript_*` library for the long tail.
+- **Agent guide**: console command `Vibe3D.GenerateAgentConfig [ClaudeCode|Gemini|Codex|Hermes|Cursor|Copilot|All] [import]`
+  writes `Content/samples/AGENTS.md.sample` into your project's `CLAUDE.md` / `GEMINI.md` / `AGENTS.md`
+  (default `All`) inside a `<!-- BEGIN Vibe3D -->…<!-- END Vibe3D -->` block, so re-running refreshes
+  only that block and leaves the rest of the file alone. `import` writes a one-line `@path` for the
+  two clients that resolve imports (Claude Code, Gemini CLI).
 
 Quick taste (editor Python):
 

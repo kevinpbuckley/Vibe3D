@@ -1,0 +1,75 @@
+# Vibe3D — AI agent guide (Unreal Engine 5.8)
+
+Vibe3D is an **AI Editor Toolset for procedural 3D modeling**. It registers one service,
+`Vibe3D.ModelingService`, into Unreal 5.8's native `ToolsetRegistry`, and a `modeling` agent skill
+into the engine's `AgentSkill` system — both reachable through the MCP tools you already have.
+
+**ALWAYS act on meshes through the service (MCP tools or editor Python) — NEVER read or write
+`.uasset` files from disk.**
+
+## 1. How to work with it (read this first)
+
+- **Load the skill first**: `call_tool` → `AgentSkillToolset.GetSkills` with `modeling`. It holds the
+  session model, the frame semantics for sweeps and lofts, the texturing pipeline, the rigging
+  workflow and the gotchas that bit real builds. Do not guess at those from memory.
+- **Batch in `execute_python_code`.** Every function is a static on `unreal.ModelingService`
+  (`svc = unreal.ModelingService`), so a whole build — create, edit, unwrap, bake, save, verify —
+  is one round-trip. `print()` the evidence you need (`get_mesh_info`, `get_uv_stats`, `list_bones`).
+- **Handles, not assets.** Meshes live in an in-editor session as integer handles wrapping a
+  `UDynamicMesh`. Nothing is an asset until `save_mesh_to_static_mesh` / `save_mesh_to_skeletal_mesh`.
+  Release handles when done (`release_mesh`, `release_all_meshes`).
+- **Read results.** Every mutating call returns `{success, message, handle, triangle_count,
+  vertex_count}`; a false `success` carries the GeometryScript error. Check `get_mesh_info(h)`
+  between stages (`is_closed`, `open_border_edges`, `connected_components`, `volume`) instead of
+  trusting a green result — booleans and voxel ops need closed, outward-facing input.
+- **Selections are named and stored per handle**, and refused once stale: re-run the `select_*`
+  call after any operation that changes topology.
+
+```python
+import unreal
+svc = unreal.ModelingService
+h = svc.create_mesh().handle
+svc.append_box(h, unreal.Transform(), 120, 80, 60)
+svc.select_by_normal_angle(h, "top", unreal.Vector(0, 0, 1), 5)
+svc.inset_faces(h, "top", 4); svc.extrude_faces(h, "top", -2)
+svc.auto_uv(h, "XAtlas"); print(svc.get_uv_stats(h).message)
+r = svc.save_mesh_to_static_mesh(h, "/Game/Props/SM_Crate", True, True, False, True); print(r.message)
+svc.generate_collision("/Game/Props/SM_Crate", "ConvexHulls", 4); svc.set_lods("/Game/Props/SM_Crate", [1.0, 0.5, 0.25])
+svc.release_all_meshes()
+```
+
+## 2. Tool roster
+
+`list_toolsets` shows `Vibe3D.ModelingService`; `describe_toolset` lists every tool with its
+parameters. The areas, in the order a build usually runs:
+
+| Area | Examples |
+|---|---|
+| Session | `create_mesh`, `load_mesh_from_static_mesh` / `_skeletal_mesh` / `_actor`, `copy_mesh`, `get_mesh_info`, `get_dynamic_mesh` (Python only: hands the `UDynamicMesh` to any `unreal.GeometryScript_*` library) |
+| Primitives & solids | `append_box/sphere/cylinder/cone/capsule/torus/disc/stairs`, `append_extrude_polygon`, `append_revolve_polygon`, `append_sweep_polyline` (open), `append_loft` (closed, capped, always outward) |
+| Booleans & cuts | `boolean` (Union/Subtract/Intersection), `self_union`, `plane_cut`, `mirror`, `cut_groove_along_polyline`, `ensure_outward` |
+| Selections | `select_all/_by_normal_angle/_in_box/_in_sphere/_by_material_id/_by_polygroup/_connected`, `expand_contract_selection`, `invert_selection`, `selection_bounds` |
+| Poly-edit & processing | `extrude/offset/inset/outset/delete_faces`, `bevel_polygroups`, `offset_mesh`, `shell_mesh`, `remesh`, `simplify_*`, `subdivide`, `smooth`, `fill_holes`, `weld_edges`, `repair`, `remove_hidden_triangles`, `split_by_components` |
+| Deform & voxel | `bend`, `twist`, `flare`, `noise`, `displace_from_texture`, `voxel_solidify`, `voxel_morphology` |
+| UVs | `auto_uv`, `project_uv`, `set_polygroup` + `recompute_uvs`, `transform_uv`, `layout_uv`, `pack_uv_per_material`, `get_uv_stats`, `world_to_uv` |
+| Textures | `bake_textures` (normals, AO, curvature, position, VertexColor, MaterialID, UVShell, Height), `bake_texture_transfer`, `import_texture`, `create_noise_texture`, `draw_on_texture` |
+| Detail | `append_mesh_at_transforms`, `append_mesh_along_polyline`, `sample_surface_points`, `ray_cast`, `nearest_point`, `measure_distance` |
+| Rigging | `create_bones`, `bind_selection_to_bone`, `list_bones`, `transfer_bone_weights`, `smooth_bone_weights`, `prune_bone_weights` |
+| Assets | `save_mesh_to_static_mesh`, `save_mesh_to_skeletal_mesh` (empty skeleton path creates `<Asset>_Skeleton`), `set_asset_materials`, `generate_collision`, `set_lods`, `spawn_static_mesh_actor` |
+
+## 3. Rules that save a rebuild
+
+- Build parts as closed solids and check `get_mesh_info(h).volume > 0` (or call `ensure_outward`)
+  before `self_union` — inside-out parts are silently discarded as negative space.
+- `append_loft` / `append_sweep_polyline` frames: the profile lies in each frame's local YZ plane
+  and is scaled by the frame's scale; `bLoop` on the polyline sweep closes the **path**, not the profile.
+- Booleans leave id gaps; `auto_uv` compacts for you, but call `repair` after heavy cutting and
+  re-make selections afterwards.
+- Verify unwraps with `get_uv_stats` (`overlap_fraction` ≈ 0, `num_unset_triangles` = 0) before
+  baking; conformal unwraps of cylinder-shaped islands fold — XAtlas is the safe default.
+- Vertex-colour masks smear across large triangles; for zone masks prefer per-pixel material logic
+  on local normal/position, or bake at high resolution on a densely tessellated copy.
+- Big bakes (4K, 4 spp) take minutes: the MCP call may time out while the editor keeps working —
+  log to a file and re-check rather than re-issuing the bake.
+- Tests: `Automation RunTests Vibe3D.Modeling` (editor must be in the foreground for the frame-rate
+  gate); `Content/Skills/modeling/scripts/exercise_all.txt` calls every function and prints `RESULT: PASS`.
