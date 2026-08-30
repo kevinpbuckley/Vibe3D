@@ -131,6 +131,17 @@ can pass to any `unreal.GeometryScript_*` library function in the same script.
   errors: a mug handle comes out as a horizontal donut, a sofa spawns upside down, a light aims at
   the sky. **Always pass by keyword** — `unreal.Rotator(roll=0, pitch=0, yaw=90)` — and confirm with
   `get_mesh_info` bounds (a flipped part shows negative Z) or by reading `.roll/.pitch/.yaw` back.
+- **Laying a cylinder/cone/capsule on an axis: `pitch=-90` gives +X, `pitch=+90` gives −X.** These
+  primitives are built along local +Z from their base, and the intuitive `pitch=90` sends them
+  *backwards* — a windmill's windshaft and hub grew back into the roof instead of out to the sails,
+  which only showed up as an unexpected `bounds_max.x`. `roll=-90` gives +Y, `roll=+90` gives −Y.
+  Check `get_mesh_info` bounds after the first one and reuse whatever proved correct.
+- **Low-step primitives are polygons, and their flats sit inside the nominal radius.** A torus or
+  cylinder with `steps=8` has radius `R` only at its corners and `R·cos(π/8) = 0.92·R` at the middle
+  of each face. Parts placed at radius `R` between corners therefore miss it entirely: an octagonal
+  gallery deck left its railing posts hanging in the air, connected to nothing. Either raise the step
+  count until the difference is under your part's thickness (24 steps → 0.9% error), or place the
+  parts at the corner angles.
 - **Booleans want closed meshes.** Run `get_mesh_info` — `is_closed` false or `open_border_edges > 0`
   means fill holes / weld first, or the boolean produces flaps. `self_union` cleans up kitbash overlaps.
 - **Selections go stale when topology changes.** After extrude, inset, boolean, remesh, bevel, etc.
@@ -243,8 +254,30 @@ sweeps) — run it before `self_union`, which silently discards inside-out parts
 Bones and skin weights are authored straight on the session mesh; saving with an empty skeleton path
 creates the Skeleton asset for you.
 
-1. **Isolate each moving piece** as its own connected component: cut a through-slot along the hinge line
-   and at both ends (`boolean` Subtract with thin boxes), so the flap is no longer attached to the wing.
+**Plan the components before you model.** `select_connected` is the only selection that grabs a moving
+part exactly, so build each part that will get its own bone in its **own handle**, `self_union` it
+there, and only then `append_mesh` it into the assembly. Appending never welds parts together, so the
+result is one mesh whose pieces are still separately selectable — no cutting required:
+
+```python
+tower = svc.create_mesh().handle; ...; svc.self_union(tower)   # stays on the root bone
+cap   = svc.create_mesh().handle; ...; svc.self_union(cap)     # will yaw
+sails = svc.create_mesh().handle; ...; svc.self_union(sails)   # will spin
+h = svc.create_mesh().handle
+for part in (tower, cap, sails):
+    svc.append_mesh(h, part, unreal.Transform()); svc.release_mesh(part)
+assert svc.get_mesh_info(h).connected_components == 3           # check before rigging
+```
+
+Check `connected_components` matches the number of pieces you expect *before* rigging — a piece that
+merged into its neighbour, or split into two, is far cheaper to fix now than after binding. Parts that
+merely touch do **not** union: overlap them by a few cm, or they stay separate and a "solid" assembly
+comes apart. A box selection is the fallback when two pieces genuinely are one component, but it will
+also catch anything else inside the box (a shaft passing through a hub), and those stray triangles
+tear when the bone moves.
+
+1. **Isolate each moving piece** as its own connected component — either built separately as above, or
+   cut free with a through-slot along the hinge line and at both ends (`boolean` Subtract with thin boxes).
 2. **Grab it** with `select_connected(h, "flap_L", point_on_the_flap)` — no radius to tune, it takes the
    whole piece nearest the point. `selection_bounds` then gives you the hinge line (the piece's forward edge).
 3. **Define the hierarchy** with `create_bones(h, [ModelingBoneDef, ...])`: the first bone is the root,
@@ -270,6 +303,13 @@ svc.create_bones(h, [
 Animate the result like any skeletal mesh — an AnimSequence keyed on the control bones (see the
 `animation` skill), a Control Rig, or `SetBoneRotationByName` on a PoseableMeshComponent for a quick
 check in a level.
+
+For continuous or variable-driven motion (a rotor, a windmill sail, a turret) the usual answer is an
+**Anim Blueprint driving the bone directly**, with no animation asset at all: Local Space Ref Pose →
+Local To Component → one Modify Bone per control bone → Component To Local → Output, and an
+EventGraph that accumulates the angle on `Event Blueprint Update Animation`. If VibeUE is installed,
+its `animation-blueprint` skill has the whole recipe, including the trap that a Modify Bone node
+ignores its Rotation pin until you set `rotation_mode` to additive in component space.
 
 ## Texturing pipeline (UVs you control, masks you can make, pixels you can draw)
 
