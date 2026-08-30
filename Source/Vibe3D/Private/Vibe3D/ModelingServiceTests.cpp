@@ -564,4 +564,74 @@ bool FVibe3DModelingUVsTexturingTest::RunTest(const FString&)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Regressions found while building the showcase props (2026-08-30).
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVibe3DModelingMaterialIdRegressionTest, "Vibe3D.Modeling.MaterialIdOnAppend", kModelingTestFlags)
+bool FVibe3DModelingMaterialIdRegressionTest::RunTest(const FString&)
+{
+	FScopedModelingSession Session;
+
+	// AppendTorus / AppendRevolvePolygon / AppendLinearStairs ignore
+	// FGeometryScriptPrimitiveOptions::MaterialID, so the service stamps it on afterwards. Without
+	// that a lamp shade or a mug handle silently lands on material slot 0 and cannot be given its
+	// own material.
+	auto OnlyMaterial = [this](int32 Handle, int32 Expected, const TCHAR* What)
+	{
+		const TArray<int32> Ids = UModelingService::GetMeshInfo(Handle).MaterialIds;
+		TestEqual(FString::Printf(TEXT("%s uses exactly one material id"), What), Ids.Num(), 1);
+		if (Ids.Num() == 1)
+		{
+			TestEqual(FString::Printf(TEXT("%s honours material_id"), What), Ids[0], Expected);
+		}
+	};
+
+	const int32 Torus = UModelingService::CreateMesh().Handle;
+	UModelingService::AppendTorus(Torus, FTransform::Identity, 40.f, 8.f, 16, 10, TEXT("Center"), 7);
+	OnlyMaterial(Torus, 7, TEXT("append_torus"));
+
+	const int32 Revolve = UModelingService::CreateMesh().Handle;
+	UModelingService::AppendRevolvePolygon(Revolve, FTransform::Identity,
+		{ FVector2D(0, 0), FVector2D(20, 0), FVector2D(20, 40), FVector2D(0, 40) }, 0.f, 16, 360.f, 5);
+	OnlyMaterial(Revolve, 5, TEXT("append_revolve_polygon"));
+
+	const int32 Stairs = UModelingService::CreateMesh().Handle;
+	UModelingService::AppendStairs(Stairs, FTransform::Identity, 40.f, 10.f, 20.f, 4, false, 3);
+	OnlyMaterial(Stairs, 3, TEXT("append_stairs"));
+
+	// Stamping must only touch the triangles the append created, not the whole mesh.
+	const int32 Mixed = MakeBox(50.f);
+	UModelingService::AppendTorus(Mixed, FTransform(FVector(0, 0, 120)), 30.f, 6.f, 16, 10, TEXT("Center"), 2);
+	TArray<int32> MixedIds = UModelingService::GetMeshInfo(Mixed).MaterialIds;
+	MixedIds.Sort();
+	TestEqual(TEXT("box keeps id 0 while the torus takes id 2"), MixedIds, TArray<int32>({ 0, 2 }));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVibe3DModelingRepairClosureTest, "Vibe3D.Modeling.RepairKeepsClosed", kModelingTestFlags)
+bool FVibe3DModelingRepairClosureTest::RunTest(const FString&)
+{
+	FScopedModelingSession Session;
+
+	// repair() collapses degenerate triangles, which can open a watertight mesh and then silently
+	// break the next boolean (it needs closed input). A mesh that arrives closed must leave closed.
+	const int32 Handle = UModelingService::CreateMesh().Handle;
+	UModelingService::AppendRevolvePolygon(Handle, FTransform::Identity,
+		{ FVector2D(0, 0), FVector2D(36, 0), FVector2D(40, 40), FVector2D(47, 95), FVector2D(0, 95) }, 0.f, 48, 360.f, 0);
+	const int32 Cavity = UModelingService::CreateMesh().Handle;
+	UModelingService::AppendRevolvePolygon(Cavity, FTransform::Identity,
+		{ FVector2D(0, 8), FVector2D(33, 8), FVector2D(37, 40), FVector2D(41, 105), FVector2D(0, 105) }, 0.f, 48, 360.f, 0);
+	UModelingService::Boolean(Handle, Cavity, TEXT("Subtract"), FTransform::Identity);
+
+	TestTrue(TEXT("hollowed mesh starts closed"), UModelingService::GetMeshInfo(Handle).bIsClosed);
+	const FModelingResult Repaired = UModelingService::Repair(Handle);
+	TestTrue(FString::Printf(TEXT("repair succeeded: %s"), *Repaired.Message), Repaired.bSuccess);
+	const FModelingMeshInfo After = UModelingService::GetMeshInfo(Handle);
+	TestTrue(TEXT("repair left the mesh closed"), After.bIsClosed);
+	TestEqual(TEXT("no open border edges after repair"), After.OpenBorderEdges, 0);
+
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS

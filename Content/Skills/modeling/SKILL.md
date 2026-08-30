@@ -81,6 +81,13 @@ svc.release_all_meshes()
 Then **look at it**: `call_tool(tool_name="CaptureViewport", toolset_name="EditorToolset.EditorAppToolset")`
 framed on the actor. A successful call is not proof the shape is right.
 
+A level made with `new_level()` has **no lighting**, so the first capture comes back black and it is
+easy to blame the mesh. A showcase level needs a DirectionalLight actually pointing down
+(`Rotator(roll=0, pitch=-48, yaw=125)` — see the rotator rule below), a SkyLight with
+`real_time_capture`, a SkyAtmosphere, and an unbound PostProcessVolume on manual exposure
+(`auto_exposure_method = AEM_MANUAL`, bias ~7.5) — without the fixed exposure, auto-exposure washes
+dark materials out to near-white and you cannot judge a colour.
+
 ## Function map (Python names)
 
 | Area | Functions |
@@ -119,6 +126,11 @@ can pass to any `unreal.GeometryScript_*` library function in the same script.
 
 - **Units are centimeters, +Z up, origin at the base by default** for `append_box`/`append_cylinder`
   (`origin="Center"` to change). A 100 cm crate at `Transform()` sits on the floor.
+- **`unreal.Rotator(a, b, c)` is `(roll, pitch, yaw)`** — not the C++ `FRotator(Pitch, Yaw, Roll)`
+  order. Passing a yaw positionally silently *pitches* the part instead of turning it, and nothing
+  errors: a mug handle comes out as a horizontal donut, a sofa spawns upside down, a light aims at
+  the sky. **Always pass by keyword** — `unreal.Rotator(roll=0, pitch=0, yaw=90)` — and confirm with
+  `get_mesh_info` bounds (a flipped part shows negative Z) or by reading `.roll/.pitch/.yaw` back.
 - **Booleans want closed meshes.** Run `get_mesh_info` — `is_closed` false or `open_border_edges > 0`
   means fill holes / weld first, or the boolean produces flaps. `self_union` cleans up kitbash overlaps.
 - **Selections go stale when topology changes.** After extrude, inset, boolean, remesh, bevel, etc.
@@ -142,6 +154,14 @@ can pass to any `unreal.GeometryScript_*` library function in the same script.
   automatically from 2.2, older builds need `unreal.GeometryScript_MeshRepair.compact_mesh(svc.get_dynamic_mesh(h))` first.
 - **Budget triangles.** Voxel ops and PN tessellation explode counts; follow them with
   `simplify_to_triangle_count`. Keep props under ~20k tris unless Nanite is on.
+- **Don't boolean two surfaces that nearly coincide.** A coffee disc unioned at the exact radius of
+  the mug's inner wall produced slivers and 214 open border edges. Either leave a clear margin
+  (~2% of the feature size) or skip the boolean: appending the part into the same handle as its own
+  nested closed component is valid for a StaticMesh and is what you want for liquid in a vessel,
+  glass in a frame, or anything that never needs to be one watertight shell.
+- **`repair()` can open a closed mesh.** Collapsing degenerates leaves holes. It now re-closes a
+  mesh that arrived watertight (`keep_closed=True` by default) — pass `False` for the raw result —
+  but always re-check `is_closed` before a boolean or voxel op.
 
 ## Common mistakes
 
@@ -149,6 +169,34 @@ can pass to any `unreal.GeometryScript_*` library function in the same script.
 - Forgetting `auto_uv` before `bake_textures` or before saving a mesh that will take a textured material.
 - `set_lods` with `[1.0]` only — that removes extra LODs. Give one entry per LOD, LOD0 first.
 - Loading a mesh from an actor and saving back to a *new* path, then wondering why the level didn't change — spawn or reassign the actor's mesh.
+- **Passing `material_id` positionally.** These wrappers have long tails of optional arguments
+  (`append_stairs(handle, transform, step_width, step_height, step_depth, num_steps, floating, material_id)`),
+  so one missing argument silently feeds your material id to `floating`. Pass the tail by keyword:
+  `svc.append_stairs(h, T(), step_width=40, step_height=10, step_depth=20, num_steps=4, material_id=7)`.
+- Assuming a rotation worked because the call returned `success`. Nothing here validates orientation —
+  check `get_mesh_info` bounds, then look at it.
+
+## Material slots
+
+A mesh carries **material IDs**; the saved asset carries **material slots**, one per distinct ID in
+ascending order. So the workflow is: give each part its id as you append it, then point the slots at
+real materials after saving.
+
+```python
+svc.append_revolve_polygon(h, T(), cup_profile, 0, 48, 360, 0)          # id 0 = ceramic
+svc.append_cylinder(h, T(V(0,0,6.6)), 3.7, 1.2, 48, 0, True, "Base", 1) # id 1 = coffee
+print(svc.get_mesh_info(h).material_ids)                                # -> [0, 1]  ALWAYS check
+svc.save_mesh_to_static_mesh(h, "/Game/Props/SM_Mug", True, True)
+svc.set_asset_materials("/Game/Props/SM_Mug", "/Game/M_Ceramic,/Game/M_Coffee")
+```
+
+- `get_mesh_info(h).material_ids` is the check that a part actually took its id — do it before saving,
+  not after wondering why the asset has one slot.
+- A part built in **another handle** keeps its ids through `append_mesh`, so either way works.
+- To give an id to something already merged in, select it and set it:
+  `svc.select_connected(h, "shade", point_on_it)` then `svc.set_material_id(h, "shade", 1)`.
+- Without `set_asset_materials` every slot renders as the default grey — a mesh with correct ids
+  still looks untextured in the viewport.
 
 ## Return types
 
@@ -164,8 +212,19 @@ flips when the sweep came out inside-out). Frame semantics:
 
 - The profile lies in each frame's local **YZ** plane: profile X runs along the frame's Y axis, profile Y
   along its Z axis.
-- The frame's **scale** multiplies the profile — put the chord (or radius) there, per frame, for taper.
+- The frame's **scale** multiplies the profile, axis for axis: **scale.Y scales profile X, scale.Z scales
+  profile Y** (scale.X does nothing). So with identity-rotation frames marching along world X, a frame
+  scale of `(1, half_width, half_height)` gives you a section that many cm wide and tall — which makes a
+  hull or fuselage a table of `(x, z, half_width, half_height)` rows and nothing else:
+  ```python
+  prof = [V2(-1,-0.9), V2(-0.55,-1), V2(0.55,-1), V2(1,-0.9), V2(1,0.72), V2(0.6,1), V2(-0.6,1), V2(-1,0.72)]
+  sections = [(-980,200,16,18), (-300,178,50,70), (60,188,64,96), (500,196,54,66), (760,176,14,15)]
+  frames = [T(V(x, 0, z), R(0,0,0), V(1.0, w, h)) for (x, z, w, h) in sections]
+  svc.append_loft(h, T(), prof, frames, 0)
+  ```
 - Frames are positioned along the path; two frames make a straight tapered section.
+- Verify the mapping with a unit square through two frames and read `get_mesh_info` bounds before
+  committing to a complex shape — it costs one call and saves rebuilding a hull.
 
 A wing running out along +Y with its chord toward −X and 6 % thickness:
 

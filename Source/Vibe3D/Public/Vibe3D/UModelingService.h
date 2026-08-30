@@ -88,7 +88,7 @@ struct FModelingMeshInfo
 
 	/** Distinct material IDs in use (empty when the mesh has no material attribute). */
 	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
-	TArray<int32> MaterialIDs;
+	TArray<int32> MaterialIds;
 
 	/** Named selections currently stored on this handle. */
 	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
@@ -505,9 +505,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Weld Edges"))
 	static FModelingResult WeldEdges(int32 Handle, float Tolerance = 0.001f);
 
-	/** Repair degenerate triangles, drop tiny floating pieces, compact — the standard cleanup after imports and booleans. */
+	/**
+	 * Repair degenerate triangles, drop tiny floating pieces, compact — the standard cleanup after
+	 * imports and booleans. Collapsing degenerates can punch holes in a watertight mesh, so with
+	 * bKeepClosed (default) a mesh that was closed on the way in is re-closed on the way out;
+	 * pass false if you want the raw result.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Repair"))
-	static FModelingResult Repair(int32 Handle, float MinComponentVolume = 0.0001f, int32 MinComponentTriangles = 1);
+	static FModelingResult Repair(int32 Handle, float MinComponentVolume = 0.0001f, int32 MinComponentTriangles = 1, bool bKeepClosed = true);
 
 	/** Remove triangles that cannot be seen from outside (kitbash interiors). */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Remove Hidden Triangles"))

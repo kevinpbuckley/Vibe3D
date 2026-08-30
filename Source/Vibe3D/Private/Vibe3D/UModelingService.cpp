@@ -319,6 +319,50 @@ namespace
 		return Options;
 	}
 
+	/** Triangle-id watermark taken before an append; pass to StampMaterialIDOnNewTriangles. */
+	int32 TriangleIDWatermark(UDynamicMesh* Mesh)
+	{
+		int32 MaxTid = 0;
+		if (Mesh)
+		{
+			Mesh->ProcessMesh([&MaxTid](const FDynamicMesh3& M) { MaxTid = M.MaxTriangleID(); });
+		}
+		return MaxTid;
+	}
+
+	/**
+	 * Some engine primitive generators — AppendTorus, AppendRevolvePolygon and AppendLinearStairs —
+	 * ignore FGeometryScriptPrimitiveOptions::MaterialID, so a caller's material_id silently landed
+	 * as 0 and the part could not be given its own material slot. Stamp the id onto the triangles
+	 * the append just created (everything at or above the pre-call watermark).
+	 */
+	void StampMaterialIDOnNewTriangles(UDynamicMesh* Mesh, int32 FirstNewTriangleID, int32 MaterialID)
+	{
+		if (!Mesh || MaterialID == 0)
+		{
+			return;   // 0 is what the generators already produce
+		}
+		Mesh->EditMesh([FirstNewTriangleID, MaterialID](FDynamicMesh3& M)
+		{
+			if (!M.HasAttributes())
+			{
+				M.EnableAttributes();
+			}
+			if (!M.Attributes()->HasMaterialID())
+			{
+				M.Attributes()->EnableMaterialID();
+			}
+			FDynamicMeshMaterialAttribute* Materials = M.Attributes()->GetMaterialID();
+			for (const int32 Tid : M.TriangleIndicesItr())
+			{
+				if (Tid >= FirstNewTriangleID)
+				{
+					Materials->SetValue(Tid, MaterialID);
+				}
+			}
+		}, EDynamicMeshChangeType::AttributeEdit);   // no MaterialIDs flag exists; Unknown is the default hint
+	}
+
 	bool ParseOrigin(const FString& Origin, EGeometryScriptPrimitiveOriginMode& Out, FString& Error)
 	{
 		if (ParseEnum(Origin, Out)) { return true; }
@@ -550,8 +594,8 @@ FModelingMeshInfo UModelingService::GetMeshInfo(int32 Handle)
 				{
 					Ids.Add(Materials->GetValue(Tid));
 				}
-				Info.MaterialIDs = Ids.Array();
-				Info.MaterialIDs.Sort();
+				Info.MaterialIds = Ids.Array();
+				Info.MaterialIds.Sort();
 			}
 		}
 	});
@@ -645,8 +689,10 @@ FModelingResult UModelingService::AppendTorus(int32 Handle, FTransform Transform
 	if (!ParseOrigin(Origin, OriginMode, Error)) { return Fail(Handle, Error); }
 	UGeometryScriptDebug* Debug = NewDebug();
 	FGeometryScriptRevolveOptions RevolveOptions;
+	const int32 Watermark = TriangleIDWatermark(Mesh);
 	UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendTorus(Mesh, PrimitiveOptions(MaterialID), Transform, RevolveOptions, MajorRadius, MinorRadius,
 		MajorSteps, MinorSteps, OriginMode, Debug);
+	StampMaterialIDOnNewTriangles(Mesh, Watermark, MaterialID);   // the generator drops PrimitiveOptions.MaterialID
 	return Finish(Handle, Mesh, Debug, TEXT("Appended torus"));
 }
 
@@ -676,7 +722,9 @@ FModelingResult UModelingService::AppendStairs(int32 Handle, FTransform Transfor
 	UDynamicMesh* Mesh = FindMesh(Handle);
 	if (!Mesh) { return NoMesh(Handle); }
 	UGeometryScriptDebug* Debug = NewDebug();
+	const int32 Watermark = TriangleIDWatermark(Mesh);
 	UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendLinearStairs(Mesh, PrimitiveOptions(MaterialID), Transform, StepWidth, StepHeight, StepDepth, NumSteps, bFloating, Debug);
+	StampMaterialIDOnNewTriangles(Mesh, Watermark, MaterialID);   // the generator drops PrimitiveOptions.MaterialID
 	return Finish(Handle, Mesh, Debug, TEXT("Appended stairs"));
 }
 
@@ -703,7 +751,9 @@ FModelingResult UModelingService::AppendRevolvePolygon(int32 Handle, FTransform 
 	UGeometryScriptDebug* Debug = NewDebug();
 	FGeometryScriptRevolveOptions RevolveOptions;
 	RevolveOptions.RevolveDegrees = RevolveDegrees;
+	const int32 Watermark = TriangleIDWatermark(Mesh);
 	UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendRevolvePolygon(Mesh, PrimitiveOptions(MaterialID), Transform, ProfilePoints, RevolveOptions, Radius, Steps, Debug);
+	StampMaterialIDOnNewTriangles(Mesh, Watermark, MaterialID);   // the generator drops PrimitiveOptions.MaterialID
 	return Finish(Handle, Mesh, Debug, TEXT("Appended revolved profile"));
 }
 
@@ -1132,20 +1182,35 @@ FModelingResult UModelingService::WeldEdges(int32 Handle, float Tolerance)
 	return Finish(Handle, Mesh, Debug, TEXT("Welded edges"));
 }
 
-FModelingResult UModelingService::Repair(int32 Handle, float MinComponentVolume, int32 MinComponentTriangles)
+FModelingResult UModelingService::Repair(int32 Handle, float MinComponentVolume, int32 MinComponentTriangles, bool bKeepClosed)
 {
 	UDynamicMesh* Mesh = FindMesh(Handle);
 	if (!Mesh) { return NoMesh(Handle); }
 	UGeometryScriptDebug* Debug = NewDebug();
 	const int32 Before = TriCount(Mesh);
+	const bool bWasClosed = UGeometryScriptLibrary_MeshQueryFunctions::GetIsClosedMesh(Mesh);
 	FGeometryScriptDegenerateTriangleOptions DegenerateOptions;
 	UGeometryScriptLibrary_MeshRepairFunctions::RepairMeshDegenerateGeometry(Mesh, DegenerateOptions, Debug);
 	FGeometryScriptRemoveSmallComponentOptions SmallOptions;
 	SmallOptions.MinVolume = MinComponentVolume;
 	SmallOptions.MinTriangleCount = MinComponentTriangles;
 	UGeometryScriptLibrary_MeshRepairFunctions::RemoveSmallComponents(Mesh, SmallOptions, Debug);
+
+	// Collapsing degenerate triangles can punch holes in a mesh that was watertight, which then
+	// silently breaks the next boolean / voxel op (they need closed input) and shows as cracks in
+	// the saved asset. Put them back when repair is what opened the mesh.
+	FString HoleNote;
+	if (bKeepClosed && bWasClosed && !UGeometryScriptLibrary_MeshQueryFunctions::GetIsClosedMesh(Mesh))
+	{
+		FGeometryScriptFillHolesOptions FillOptions;
+		int32 NumFilled = 0, NumFailed = 0;
+		UGeometryScriptLibrary_MeshRepairFunctions::FillAllMeshHoles(Mesh, FillOptions, NumFilled, NumFailed, Debug);
+		HoleNote = FString::Printf(TEXT(", re-closed %d hole(s)%s"), NumFilled,
+			NumFailed > 0 ? *FString::Printf(TEXT(" (%d could not be filled)"), NumFailed) : TEXT(""));
+	}
 	UGeometryScriptLibrary_MeshRepairFunctions::CompactMesh(Mesh, Debug);
-	return Finish(Handle, Mesh, Debug, FString::Printf(TEXT("Repaired (%d -> %d triangles)"), Before, TriCount(Mesh)));
+	return Finish(Handle, Mesh, Debug,
+		FString::Printf(TEXT("Repaired (%d -> %d triangles%s)"), Before, TriCount(Mesh), *HoleNote));
 }
 
 FModelingResult UModelingService::RemoveHiddenTriangles(int32 Handle)
