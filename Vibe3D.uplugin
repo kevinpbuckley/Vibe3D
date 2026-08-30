@@ -1,21 +1,21 @@
 {
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "0.1",
+	"VersionName": "1.0",
 	"EngineVersion": "5.8.0",
 	"FriendlyName": "Vibe3D",
 	"Description": "AI Editor Toolset for procedural 3D modeling in Unreal Engine 5.8: the operators behind Modeling Mode (primitives, booleans, lofts, remeshing, UVs, baking, rigging, collision, LODs) exposed as an AICallable toolset on the native MCP endpoint, with a companion agent skill.",
 	"Category": "Editor",
-	"CreatedBy": "Kevin Buckley",
-	"CreatedByURL": "https://github.com/kevinpbuckley/Vibe3D",
-	"DocsURL": "https://github.com/kevinpbuckley/Vibe3D",
+	"CreatedBy": "Buckley Builds LLC",
+	"CreatedByURL": "https://www.vibeue.com",
+	"DocsURL": "https://www.vibeue.com/vibe3d",
 	"MarketplaceURL": "",
-	"SupportURL": "https://github.com/kevinpbuckley/Vibe3D/issues",
+	"SupportURL": "https://www.vibeue.com/support",
 	"CanContainContent": true,
-	"IsBetaVersion": true,
+	"IsBetaVersion": false,
 	"IsExperimentalVersion": false,
 	"Installed": false,
-	"EnabledByDefault": true,
+	"EnabledByDefault": false,
 	"Modules": [
 		{
 			"Name": "Vibe3D",
@@ -31,6 +31,14 @@
 	"Plugins": [
 		{
 			"Name": "GeometryScripting",
+			"Enabled": true
+		},
+		{
+			"Name": "GeometryProcessing",
+			"Enabled": true
+		},
+		{
+			"Name": "MeshModelingToolset",
 			"Enabled": true
 		},
 		{

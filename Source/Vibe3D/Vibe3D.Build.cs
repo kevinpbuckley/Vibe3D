@@ -9,7 +9,10 @@ public class Vibe3D : ModuleRules
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		IWYUSupport = IWYUSupport.None;
 		bUseUnity = false;
-		bWarningsAsErrors = true;
+		// Not warnings-as-errors for distribution: Epic compiles this source on their own toolchain
+		// across engine patch releases, where a new engine-header deprecation would otherwise turn
+		// into a hard build failure and a rejected Fab submission (VibeUE hit exactly this, issue #569).
+		bWarningsAsErrors = false;
 
 		PublicDependencyModuleNames.AddRange(
 			new string[]

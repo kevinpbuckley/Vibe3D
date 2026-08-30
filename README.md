@@ -15,7 +15,7 @@ cd <YourProject>/Plugins
 git clone https://github.com/kevinpbuckley/Vibe3D.git
 ```
 
-Build the project (the plugin is `EnabledByDefault`). Requires UE 5.8 with the engine plugins
+Build the project, then enable **Vibe3D** in Edit > Plugins (Editor category) and restart. Requires UE 5.8 with the engine plugins
 **GeometryScripting**, **ToolsetRegistry**, **PythonScriptPlugin** and **EditorScriptingUtilities**
 (all enabled automatically as dependencies). Works alongside [VibeUE](https://github.com/kevinpbuckley/VibeUE)
 but does not depend on it.
