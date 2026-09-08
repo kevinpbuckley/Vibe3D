@@ -45,7 +45,7 @@ here needs a viewport, a gizmo, or Blender.
 
 **Mental model — a session of mesh handles:**
 
-1. `create_mesh()` / `load_mesh_from_static_mesh(path)` / `load_mesh_from_actor(label)` → an integer **handle**.
+1. `create_mesh()` / `load_mesh_from_static_mesh(path)` / `load_mesh_from_actor(label)` → a result; check `success`, then use its integer **`.handle`**.
 2. Every op mutates the handle's mesh in place and returns an `FModelingResult` (`success`, `message`, `triangle_count`, `vertex_count`).
 3. `save_mesh_to_static_mesh(handle, "/Game/Props/SM_Crate")` writes the asset (creates or replaces); `spawn_static_mesh_actor(...)` places it.
 4. `release_mesh(handle)` when done (or `release_all_meshes()`); handles are session-scoped and not saved.
@@ -59,9 +59,9 @@ Operations that take a **selection** use a named selection created on the same h
 ```python
 import unreal
 svc = unreal.ModelingService
-h = svc.create_mesh()
+h = svc.create_mesh().handle
 svc.append_box(h, unreal.Transform(), 100, 100, 100)                       # body
-lid = svc.create_mesh()
+lid = svc.create_mesh().handle
 svc.append_box(lid, unreal.Transform(unreal.Vector(0, 0, 90)), 104, 104, 4) # lid slab
 svc.boolean(h, lid, "Union")
 svc.select_by_normal_angle(h, "top", unreal.Vector(0, 0, 1), 5.0)
@@ -78,15 +78,19 @@ svc.spawn_static_mesh_actor("/Game/Props/SM_Crate", unreal.Transform(unreal.Vect
 svc.release_all_meshes()
 ```
 
-Then **look at it**: `call_tool(tool_name="CaptureViewport", toolset_name="EditorToolset.EditorAppToolset")`
-framed on the actor. A successful call is not proof the shape is right.
+Then **look at it**, framed on the actor, using the available viewport capture tool (native Unreal
+MCP exposes `capture_image` with `source="editor"`). A successful call is not proof the shape is right.
 
-A level made with `new_level()` has **no lighting**, so the first capture comes back black and it is
-easy to blame the mesh. A showcase level needs a DirectionalLight actually pointing down
-(`Rotator(roll=0, pitch=-48, yaw=125)` — see the rotator rule below), a SkyLight with
-`real_time_capture`, a SkyAtmosphere, and an unbound PostProcessVolume on manual exposure
-(`auto_exposure_method = AEM_MANUAL`, bias ~7.5) — without the fixed exposure, auto-exposure washes
-dark materials out to near-white and you cannot judge a colour.
+A level made with `new_level()` has **no lighting**, so a black capture may be a lighting problem.
+For daylight, use a DirectionalLight pointing down (`Rotator(roll=0, pitch=-48, yaw=125)`),
+a SkyLight and SkyAtmosphere. A dark studio can instead use movable RectLights and a floor.
+Use an unbound PostProcessVolume with fixed exposure for consistent material evaluation; tune
+exposure to the actual light intensities rather than treating one bias value as universal.
+
+For modeled lettering and logos, read [modeled-lettering.md](modeled-lettering.md).
+For lit promotional images, high-resolution capture, or distributable asset packs, read
+[showcase-and-delivery.md](showcase-and-delivery.md). These sibling documents are also registered
+as native Unreal agent sub-doc skills by Vibe3D.
 
 ## Function map (Python names)
 
@@ -248,6 +252,9 @@ svc.append_loft(h, unreal.Transform(), airfoil, frames, 0)
 
 `ensure_outward(h)` does the same volume check on any closed part you built another way (revolves, raw
 sweeps) — run it before `self_union`, which silently discards inside-out parts as negative space.
+Apply this to each separate part before appending it to an assembly, especially after reflecting
+polygon coordinates. The assembly's total signed volume can be positive while a smaller component
+is still inside-out; a single check on the combined handle will miss that component.
 
 ## Rigging control surfaces (rudders, flaps, canopies, turrets)
 
