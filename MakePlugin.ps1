@@ -2,12 +2,12 @@
 #
 # Vibe3D plugin packaging script for Fab marketplace submission.
 #
-# Produces a clean source-only plugin folder (and optional .zip) with everything Fab forbids
+# Produces a clean source-only plugin folder and .zip by default with everything Fab forbids
 # stripped out: build output, VCS metadata, editor caches and binaries. Epic compiles the
 # submitted source themselves, so no Binaries/ or Intermediate/ may ship.
 #
-#   .\MakePlugin.ps1                      # -> <Project>\Saved\Vibe3D-Fab\Vibe3D
-#   .\MakePlugin.ps1 -Zip                 # also writes Vibe3D-<version>.zip
+#   .\MakePlugin.ps1                      # -> <Project>\Saved\Vibe3D-Fab\Vibe3D and Vibe3D-<version>.zip
+#   .\MakePlugin.ps1 -Zip:$false          # folder only
 #   .\MakePlugin.ps1 -OutputDir D:\out
 #
 # Validate the result before submitting (see FAB-Checklist.md):
@@ -18,7 +18,7 @@ param(
     # Default output sits under the host project's Saved/ — never inside Plugins/, where the
     # engine would discover the packaged copy's .uplugin and try to load a duplicate module.
     [string]$OutputDir = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'Saved\Vibe3D-Fab'),
-    [switch]$Zip
+    [switch]$Zip = $true
 )
 
 $ErrorActionPreference = 'Stop'
