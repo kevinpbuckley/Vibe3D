@@ -39,12 +39,12 @@ Status of the plugin against Epic's Fab requirements for a **code plugin**. Mirr
 - [x] All source/header files carry `// Copyright Buckley Builds LLC 2026 All Rights Reserved.`
 - [x] Shipped Content files carry the same notice (in `SKILL.md` it sits **after** the YAML
       frontmatter — a header above it breaks skill registration in `init_unreal.py`)
-- [x] `LICENSE` present in the repo. Fab distributes under the Fab licence only, so
-      `MakePlugin.ps1` may be told to strip it from the package if you follow VibeUE's convention
+- [x] `LICENSE` retained in the repo and excluded from the submission ZIP, matching VibeUE's packaging convention.
 
 ### File structure
 - [x] No unused or local-only folders in the packaged distribution (`MakePlugin.ps1` excludes
-      `Binaries`, `Intermediate`, `Saved`, `.git`, `.github`, `.vs`, `__pycache__`, `.venv`)
+      build output, caches, IDE settings, virtual environments, development docs, listing collateral,
+      and packaging scripts using VibeUE's exclusions; required Content and user documentation remain)
 - [x] `Config/FilterPlugin.ini` lists the extra files to ship. UAT's `BuildPlugin` only includes
       the `.uplugin`, `/Resources/...`, `/Content/...`, `/Source/...`, `/Shaders/...` and
       `/Binaries/ThirdParty/...`; **`/Config` itself and anything at the plugin root are dropped**

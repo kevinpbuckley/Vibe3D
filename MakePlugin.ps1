@@ -38,8 +38,18 @@ $excludeDirs = @(
     '.git',
     '.github',
     '.vs',
+    '.vscode',
+    '.cursor',
+    'Packaged',
     '__pycache__',
+    '.pytest_cache',
     '.venv',
+    'venv',
+    'build',
+    'dist',
+    '*.egg-info',
+    'docs',
+    'node_modules',
     'FabImages'        # listing art lives outside the plugin
 )
 
@@ -52,9 +62,32 @@ $excludeFiles = @(
     '*.suo',
     '*.user',
     '*.pyc',
+    '*.pyo',
+    '*.log',
+    '*.tmp',
+    '*.exp',
+    '*.ilk',
+    '*~',
+    '.DS_Store',
+    'Thumbs.db',
+    'Desktop.ini',
     '.gitignore',
     '.gitattributes',
-    'MakePlugin.ps1'   # the packaging tool itself is not part of the product
+    'MakePlugin.ps1',  # the packaging tool itself is not part of the product
+    'LICENSE',        # match VibeUE: retain the repository license outside the submission ZIP
+    'CLAUDE.md',
+    'DEAD_HANDLERS_DELETED.md',
+    'HANDLER_AUDIT.md',
+    'HANDLER_AUDIT_COMPLETE.md',
+    'ISSUE_SUMMARY.md',
+    'BUILD_PLUGIN.md',
+    'BuildPlugin.bat',
+    'MCP-Inspector.bat',
+    'BuildAndLaunchGame.ps1',
+    'AddCopyrights.ps1',
+    'FAB-DESCRIPTION.md',
+    'FAB_Tech_Details.md',
+    'FAB-Checklist.md'
 )
 
 Write-Host "Vibe3D -> $dest" -ForegroundColor Cyan
@@ -66,7 +99,7 @@ Get-ChildItem -Path $src -Recurse -File | ForEach-Object {
     $relative = $_.FullName.Substring($src.Length).TrimStart('\', '/')
     $segments = $relative -split '[\\/]'
 
-    foreach ($dir in $excludeDirs) { if ($segments -contains $dir) { return } }
+    foreach ($dir in $excludeDirs) { if ($segments | Where-Object { $_ -like $dir }) { return } }
     foreach ($pattern in $excludeFiles) { if ($_.Name -like $pattern) { return } }
 
     $target = Join-Path $dest $relative
@@ -77,8 +110,8 @@ Get-ChildItem -Path $src -Recurse -File | ForEach-Object {
 }
 Write-Host "  copied $copied files" -ForegroundColor DarkGray
 
-# Fab requires a code plugin to carry these; fail loudly rather than submitting a broken zip.
-$required = @('Vibe3D.uplugin', 'README.md', 'LICENSE', 'Source', 'Content', 'Config', 'Resources',
+# Required product files; listing collateral and the repository license are excluded above.
+$required = @('Vibe3D.uplugin', 'README.md', 'Source', 'Content', 'Config', 'Resources',
               'Resources\Icon128.png', 'Config\FilterPlugin.ini')
 $missing = @()
 foreach ($item in $required) { if (-not (Test-Path (Join-Path $dest $item))) { $missing += $item } }
@@ -113,6 +146,15 @@ if ($Zip) {
         $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
         if ($entries -notcontains 'Vibe3D.uplugin' -or -not ($entries | Where-Object { $_.StartsWith('Source/') })) {
             throw 'Invalid plugin ZIP layout: descriptor and Source must be at the archive root.'
+        }
+        foreach ($entry in $entries) {
+            $parts = $entry -split '/'
+            foreach ($pattern in $excludeDirs) {
+                if ($parts | Where-Object { $_ -like $pattern }) { throw "Excluded directory in ZIP: $entry" }
+            }
+            foreach ($pattern in $excludeFiles) {
+                if ($parts[-1] -like $pattern) { throw "Excluded file in ZIP: $entry" }
+            }
         }
     } finally { $archive.Dispose() }
     Write-Host "  zip: $zipPath" -ForegroundColor Green
