@@ -6,7 +6,7 @@
 # stripped out: build output, VCS metadata, editor caches and binaries. Epic compiles the
 # submitted source themselves, so no Binaries/ or Intermediate/ may ship.
 #
-#   .\MakePlugin.ps1                      # -> <Project>\Saved\Vibe3D-Fab\Vibe3D and Vibe3D-<version>.zip
+#   .\MakePlugin.ps1                      # -> ../Vibe3D.zip (same location/layout as VibeUE.zip)
 #   .\MakePlugin.ps1 -Zip:$false          # folder only
 #   .\MakePlugin.ps1 -OutputDir D:\out
 #
@@ -15,15 +15,20 @@
 
 [CmdletBinding()]
 param(
-    # Default output sits under the host project's Saved/ — never inside Plugins/, where the
-    # engine would discover the packaged copy's .uplugin and try to load a duplicate module.
-    [string]$OutputDir = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'Saved\Vibe3D-Fab'),
+    # The archive sits beside the source plugin, matching VibeUE's packaging convention.
+    [string]$OutputDir = (Split-Path -Parent $PSScriptRoot),
     [switch]$Zip = $true
 )
 
 $ErrorActionPreference = 'Stop'
 $src = $PSScriptRoot
-$dest = Join-Path $OutputDir 'Vibe3D'
+# Keep the unpacked staging copy outside Plugins to avoid duplicate module discovery.
+$stageRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent (Split-Path -Parent $src)) 'Saved\Vibe3D-Fab'))
+$dest = [System.IO.Path]::GetFullPath((Join-Path $stageRoot 'Vibe3D'))
+$OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
+if ($dest -eq $src -or -not $dest.StartsWith($stageRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Unsafe staging destination: $dest"
+}
 
 # Directories that must never reach the package.
 $excludeDirs = @(
@@ -53,7 +58,7 @@ $excludeFiles = @(
 )
 
 Write-Host "Vibe3D -> $dest" -ForegroundColor Cyan
-if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
 $copied = 0
@@ -97,8 +102,18 @@ $version = (Get-Content (Join-Path $dest 'Vibe3D.uplugin') -Raw | ConvertFrom-Js
 Write-Host "OK - Vibe3D $version packaged" -ForegroundColor Green
 
 if ($Zip) {
-    $zipPath = Join-Path $OutputDir "Vibe3D-$version.zip"
-    if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-    Compress-Archive -Path $dest -DestinationPath $zipPath
+    New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+    $zipPath = Join-Path $OutputDir 'Vibe3D.zip'
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    # includeBaseDirectory=False puts the descriptor and Source directly at the ZIP root.
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($dest, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+    try {
+        $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+        if ($entries -notcontains 'Vibe3D.uplugin' -or -not ($entries | Where-Object { $_.StartsWith('Source/') })) {
+            throw 'Invalid plugin ZIP layout: descriptor and Source must be at the archive root.'
+        }
+    } finally { $archive.Dispose() }
     Write-Host "  zip: $zipPath" -ForegroundColor Green
 }
