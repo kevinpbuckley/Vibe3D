@@ -67,6 +67,7 @@
 #include "DynamicMesh/DynamicVertexSkinWeightsAttribute.h"
 #include "Engine/SkinnedAssetCommon.h"
 #include "Materials/Material.h"
+#include "MaterialDomain.h"
 #include "SkeletalMeshAttributes.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogVibe3DModeling, Log, All);
@@ -310,6 +311,16 @@ namespace
 		}
 		Out = Found->Selection;
 		return true;
+	}
+
+	/** Extrude, offset and inset keep the edited region's triangle ids, so its named selection follows those faces into the next op. */
+	FModelingResult KeepRegionSelection(const FModelingResult& Result, int32 Handle, const FString& Name, UDynamicMesh* Mesh, const FGeometryScriptMeshSelection& Selection)
+	{
+		if (Result.bSuccess && !Name.IsEmpty() && Selection.GetSelectionType() == EGeometryScriptMeshSelectionType::Triangles && SelectionIsValidForMesh(Mesh, Selection))
+		{
+			StoreSelection(Handle, Name, Selection);
+		}
+		return Result;
 	}
 
 	FGeometryScriptPrimitiveOptions PrimitiveOptions(int32 MaterialID)
@@ -966,7 +977,7 @@ FModelingResult UModelingService::ExtrudeFaces(int32 Handle, const FString& Sele
 	}
 	UGeometryScriptDebug* Debug = NewDebug();
 	UGeometryScriptLibrary_MeshModelingFunctions::ApplyMeshLinearExtrudeFaces(Mesh, Options, Selection, Debug);
-	return Finish(Handle, Mesh, Debug, FString::Printf(TEXT("Extruded %d faces by %.2f"), Selection.GetNumSelected(), Distance));
+	return KeepRegionSelection(Finish(Handle, Mesh, Debug, FString::Printf(TEXT("Extruded %d faces by %.2f"), Selection.GetNumSelected(), Distance)), Handle, SelectionName, Mesh, Selection);
 }
 
 FModelingResult UModelingService::OffsetFaces(int32 Handle, const FString& SelectionName, float Distance)
@@ -979,7 +990,7 @@ FModelingResult UModelingService::OffsetFaces(int32 Handle, const FString& Selec
 	Options.Distance = Distance;
 	UGeometryScriptDebug* Debug = NewDebug();
 	UGeometryScriptLibrary_MeshModelingFunctions::ApplyMeshOffsetFaces(Mesh, Options, Selection, Debug);
-	return Finish(Handle, Mesh, Debug, FString::Printf(TEXT("Offset %d faces by %.2f"), Selection.GetNumSelected(), Distance));
+	return KeepRegionSelection(Finish(Handle, Mesh, Debug, FString::Printf(TEXT("Offset %d faces by %.2f"), Selection.GetNumSelected(), Distance)), Handle, SelectionName, Mesh, Selection);
 }
 
 FModelingResult UModelingService::InsetFaces(int32 Handle, const FString& SelectionName, float Distance, float Softness)
@@ -993,7 +1004,7 @@ FModelingResult UModelingService::InsetFaces(int32 Handle, const FString& Select
 	Options.Softness = Softness;
 	UGeometryScriptDebug* Debug = NewDebug();
 	UGeometryScriptLibrary_MeshModelingFunctions::ApplyMeshInsetOutsetFaces(Mesh, Options, Selection, Debug);
-	return Finish(Handle, Mesh, Debug, FString::Printf(TEXT("Inset %d faces by %.2f"), Selection.GetNumSelected(), Distance));
+	return KeepRegionSelection(Finish(Handle, Mesh, Debug, FString::Printf(TEXT("Inset %d faces by %.2f"), Selection.GetNumSelected(), Distance)), Handle, SelectionName, Mesh, Selection);
 }
 
 FModelingResult UModelingService::OutsetFaces(int32 Handle, const FString& SelectionName, float Distance, float Softness)

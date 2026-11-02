@@ -24,7 +24,8 @@ into the engine's `AgentSkill` system — both reachable through the MCP tools y
   between stages (`is_closed`, `open_border_edges`, `connected_components`, `volume`) instead of
   trusting a green result — booleans and voxel ops need closed, outward-facing input.
 - **Selections are named and stored per handle**, and refused once stale: re-run the `select_*`
-  call after any operation that changes topology.
+  call after any operation that changes topology. Extrude, offset, inset and outset keep their
+  selection on the faces they moved (an inset's inner panel), so the example below chains.
 
 ```python
 import unreal

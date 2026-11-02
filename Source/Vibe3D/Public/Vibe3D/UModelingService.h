@@ -446,15 +446,15 @@ public:
 	// Poly-edit operations (Modeling Mode's PolyEdit / Offset / Bevel)
 	// =====================================================================
 
-	/** Extrude selected faces. Zero Direction = along each face's average normal; otherwise a fixed world direction. Negative distance recesses. */
+	/** Extrude selected faces. Zero Direction = along each face's average normal; otherwise a fixed world direction. Negative distance recesses. The selection then holds the moved faces. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Extrude Faces"))
 	static FModelingResult ExtrudeFaces(int32 Handle, const FString& SelectionName, float Distance = 10.f, FVector Direction = FVector::ZeroVector);
 
-	/** Offset selected faces along their normals (parallel face offset). */
+	/** Offset selected faces along their normals (parallel face offset). The selection then holds the moved faces. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Offset Faces"))
 	static FModelingResult OffsetFaces(int32 Handle, const FString& SelectionName, float Distance = 10.f);
 
-	/** Inset selected faces (panel lines, frames). Softness rounds the inset boundary. */
+	/** Inset selected faces (panel lines, frames). Softness rounds the inset boundary. The selection then holds the inner faces, ready to extrude. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Inset Faces"))
 	static FModelingResult InsetFaces(int32 Handle, const FString& SelectionName, float Distance = 5.f, float Softness = 0.f);
 

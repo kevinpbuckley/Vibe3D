@@ -148,9 +148,11 @@ can pass to any `unreal.GeometryScript_*` library function in the same script.
   parts at the corner angles.
 - **Booleans want closed meshes.** Run `get_mesh_info` — `is_closed` false or `open_border_edges > 0`
   means fill holes / weld first, or the boolean produces flaps. `self_union` cleans up kitbash overlaps.
-- **Selections go stale when topology changes.** After extrude, inset, boolean, remesh, bevel, etc.
+- **Selections go stale when topology changes.** After boolean, remesh, bevel, subdivide, etc.
   re-run the `select_*` call before using the name again; the service refuses a selection made
   before the mesh changed (`success: false`, "stale") rather than acting on wrong triangles.
+  `extrude_faces`, `offset_faces`, `inset_faces` and `outset_faces` are the exception: the selection
+  they used then holds the faces they moved (an inset's inner panel), so inset → extrude chains.
 - **Order for a clean asset:** model → `repair` → `recompute_normals` → `auto_uv` → `save` →
   `generate_collision` → `set_lods`. UVs before save, collision and LODs after (they act on the asset).
 - **`save_mesh_to_static_mesh` replaces LOD0 of an existing asset** when `replace_existing` is true;

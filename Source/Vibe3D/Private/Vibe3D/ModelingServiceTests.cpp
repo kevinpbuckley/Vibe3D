@@ -163,14 +163,15 @@ bool FVibe3DModelingSelectionEditTest::RunTest(const FString&)
 	TestTrue(TEXT("select by polygroup"), UModelingService::SelectByPolygroup(H, TEXT("g1"), 1) >= 0);
 
 	TestTrue(TEXT("inset"), UModelingService::InsetFaces(H, TEXT("top"), 6.f).bSuccess);
-	UModelingService::SelectByNormalAngle(H, TEXT("top"), FVector::UpVector, 5.f);
+	TestEqual(TEXT("inset keeps the inner panel selected"), UModelingService::SelectionCount(H, TEXT("top")), 2);
 	const FModelingResult Extruded = UModelingService::ExtrudeFaces(H, TEXT("top"), -1.5f);
-	TestTrue(TEXT("extrude"), Extruded.bSuccess);
-	UModelingService::SelectByNormalAngle(H, TEXT("top"), FVector::UpVector, 5.f);
+	TestTrue(TEXT("extrude the inset panel without re-selecting"), Extruded.bSuccess);
+	TestTrue(TEXT("only the inner panel recessed"), UModelingService::SelectionBounds(H, TEXT("top"), Min, Max)
+		&& FMath::IsNearlyEqual(Max.Z, 98.5, 0.01) && Max.X < 49.0);
 	TestTrue(TEXT("outset"), UModelingService::OutsetFaces(H, TEXT("top"), 2.f).bSuccess);
 	TestTrue(TEXT("side select"), UModelingService::SelectByNormalAngle(H, TEXT("side"), FVector(1, 0, 0), 5.f) > 0);
 	TestTrue(TEXT("offset faces"), UModelingService::OffsetFaces(H, TEXT("side"), 2.f).bSuccess);
-	TestFalse(TEXT("stale side selection refused after offset"), UModelingService::TranslateSelection(H, TEXT("side"), FVector(1, 0, 0)).bSuccess);
+	TestTrue(TEXT("side selection follows the offset faces"), UModelingService::TranslateSelection(H, TEXT("side"), FVector(1, 0, 0)).bSuccess);
 	UModelingService::SelectByNormalAngle(H, TEXT("side"), FVector(1, 0, 0), 5.f);
 	TestTrue(TEXT("translate selection"), UModelingService::TranslateSelection(H, TEXT("side"), FVector(1, 0, 0)).bSuccess);
 	TestTrue(TEXT("set material id"), UModelingService::SetMaterialID(H, TEXT("side"), 3).bSuccess);
