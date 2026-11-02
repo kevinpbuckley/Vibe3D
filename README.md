@@ -72,4 +72,4 @@ test_prompts/modeling/    sequential agent prompts covering every function
 
 ## License
 
-Copyright Buckley Builds LLC 2026. All rights reserved.
+MIT — see [LICENSE](LICENSE).
