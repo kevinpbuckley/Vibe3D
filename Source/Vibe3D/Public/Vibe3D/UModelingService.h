@@ -748,6 +748,27 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Prune Bone Weights"))
 	static FModelingResult PruneBoneWeights(int32 Handle, const FString& BoneNames);
 
+	/** Select every vertex where the listed bones (comma-separated) together hold at least MinWeight of the skinning — the region a bone actually drags. Returns the vertex count. */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Select By Bone Weight"))
+	static int32 SelectByBoneWeight(int32 Handle, const FString& SelectionName, const FString& BoneNames, float MinWeight = 0.25f);
+
+	/**
+	 * Scale the listed bones' influence on a selection ("" = whole mesh): Scale 0 removes it, 0.25 keeps a quarter. The freed
+	 * weight goes to ReceiverBoneName when given, otherwise to each vertex's strongest other influence. The targeted fix for
+	 * clothing that follows the wrong bone — a collar lifting with the head, a skirt hem glued to a thigh. Vertices bound
+	 * only to the listed bones are skipped unless a receiver is named.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Scale Bone Weights"))
+	static FModelingResult ScaleBoneWeights(int32 Handle, const FString& SelectionName, const FString& BoneNames, float Scale = 0.f, const FString& ReceiverBoneName = TEXT(""));
+
+	/** Laplacian-smooth skin weights across a selection ("" = whole mesh) — soften the seam after BindSelectionToBone or ScaleBoneWeights so a rigid patch blends into its surroundings. */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Smooth Selection Bone Weights"))
+	static FModelingResult SmoothSelectionBoneWeights(int32 Handle, const FString& SelectionName, int32 Iterations = 3, float Alpha = 0.5f);
+
+	/** Per-bone skin weight report over a selection ("" = whole mesh): influenced vertices, average/max weight per bone, weight-sum range, max influences. Verify a repair before saving. */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Inspect Bone Weights"))
+	static FModelingResult InspectBoneWeights(int32 Handle, const FString& SelectionName = TEXT(""));
+
 	// =====================================================================
 	// Lofts, orientation, connected pieces
 	// =====================================================================

@@ -1695,6 +1695,9 @@ FModelingResult UModelingService::SaveMeshToSkeletalMesh(int32 Handle, const FSt
 
 	const bool bExists = UEditorAssetLibrary::DoesAssetExist(AssetPath);
 	USkeleton* Skeleton = nullptr;
+	// Only a skeleton this call created (or its own <AssetPath>_Skeleton) is ours to modify and save. A skeleton passed in by path is
+	// usually shared (an engine MetaHuman skeleton, a game skeleton): binding a new mesh to it must never re-save it.
+	bool bOwnSkeleton = false;
 	FString SkeletonNote;
 	if (!SkeletonPath.IsEmpty())
 	{
@@ -1721,6 +1724,7 @@ FModelingResult UModelingService::SaveMeshToSkeletalMesh(int32 Handle, const FSt
 			FAssetRegistryModule::AssetCreated(Skeleton);
 			Package->MarkPackageDirty();
 		}
+		bOwnSkeleton = true;
 		SkeletonNote = FString::Printf(TEXT(" with skeleton %s"), *NewSkeletonPath);
 	}
 
@@ -1750,7 +1754,7 @@ FModelingResult UModelingService::SaveMeshToSkeletalMesh(int32 Handle, const FSt
 			Options.Materials.Add(*FString::Printf(TEXT("Slot%d"), i), UMaterial::GetDefaultMaterial(MD_Surface));
 		}
 		SkeletalMesh = UGeometryScriptLibrary_CreateNewAssetFunctions::CreateNewSkeletalMeshAssetFromMesh(Mesh, Skeleton, AssetPath, Options, Outcome, Debug);
-		if (SkeletalMesh && Skeleton && !Skeleton->GetPreviewMesh())
+		if (SkeletalMesh && Skeleton && bOwnSkeleton && !Skeleton->GetPreviewMesh())
 		{
 			Skeleton->SetPreviewMesh(SkeletalMesh);
 		}
@@ -1761,7 +1765,7 @@ FModelingResult UModelingService::SaveMeshToSkeletalMesh(int32 Handle, const FSt
 		return Fail(Handle, FString::Printf(TEXT("Saving to %s failed: %s"), *AssetPath, *DebugText(Debug)));
 	}
 	SaveIf(bSaveAsset, SkeletalMesh->GetPathName());
-	if (Skeleton) { SaveIf(bSaveAsset, Skeleton->GetPathName()); }
+	if (Skeleton && bOwnSkeleton) { SaveIf(bSaveAsset, Skeleton->GetPathName()); }
 	FModelingResult R = Ok(Handle, Mesh, What);
 	R.AssetPath = SkeletalMesh->GetPathName();
 	return R;
@@ -2550,6 +2554,308 @@ TArray<FModelingBoneInfo> UModelingService::ListBones(int32 Handle)
 		}
 	});
 	return Out;
+}
+
+namespace
+{
+	/** Comma-separated bone names -> attribute bone indices. Returns false and fills Error when any name is missing or the list is empty. */
+	bool ParseBoneIndices(const FDynamicMeshAttributeSet* Attributes, const FString& BoneNames, TSet<int32>& OutIndices, FString& Error)
+	{
+		TArray<FString> Names;
+		BoneNames.ParseIntoArray(Names, TEXT(","), true);
+		for (FString& Name : Names)
+		{
+			Name.TrimStartAndEndInline();
+			if (Name.IsEmpty()) { continue; }
+			const int32 Index = FindBoneIndexByName(Attributes, FName(*Name));
+			if (Index == INDEX_NONE)
+			{
+				Error = FString::Printf(TEXT("No bone named '%s' (see list_bones)"), *Name);
+				return false;
+			}
+			OutIndices.Add(Index);
+		}
+		if (OutIndices.Num() == 0)
+		{
+			Error = TEXT("BoneNames must list at least one bone (comma-separated)");
+			return false;
+		}
+		return true;
+	}
+
+	/** Selection ("" = whole mesh) -> vertex id array. */
+	bool SelectionVertices(int32 Handle, const FString& SelectionName, UDynamicMesh* Mesh, TArray<int32>& OutVertices, FString& Error)
+	{
+		FGeometryScriptMeshSelection Selection;
+		if (!ResolveSelection(Handle, SelectionName, Mesh, Selection, Error)) { return false; }
+		FGeometryScriptIndexList Vertices;
+		EGeometryScriptIndexType ResultType = EGeometryScriptIndexType::Any;
+		UGeometryScriptLibrary_MeshSelectionFunctions::ConvertMeshSelectionToIndexList(Mesh, Selection, Vertices, ResultType, EGeometryScriptIndexType::Vertex);
+		if (!Vertices.List.IsValid() || ResultType != EGeometryScriptIndexType::Vertex)
+		{
+			Error = FString::Printf(TEXT("Selection '%s' could not be converted to vertices"), *SelectionName);
+			return false;
+		}
+		OutVertices = *Vertices.List;
+		return true;
+	}
+}
+
+int32 UModelingService::SelectByBoneWeight(int32 Handle, const FString& SelectionName, const FString& BoneNames, float MinWeight)
+{
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	if (!Mesh || SelectionName.IsEmpty()) { return -1; }
+	const float Threshold = FMath::Clamp(MinWeight, 0.f, 1.f);
+	TArray<int32> Vids;
+	FString Error;
+	bool bOk = false;
+	Mesh->ProcessMesh([&](const FDynamicMesh3& M)
+	{
+		if (!M.HasAttributes() || !M.Attributes()->HasBones()) { Error = TEXT("Mesh has no bones: run create_bones or load a skeletal mesh first"); return; }
+		TSet<int32> Targets;
+		if (!ParseBoneIndices(M.Attributes(), BoneNames, Targets, Error)) { return; }
+		const FSkinWeights* Skin = M.Attributes()->GetSkinWeightsAttribute(FSkeletalMeshAttributes::DefaultSkinWeightProfileName);
+		if (!Skin) { Error = TEXT("Mesh has no skin weights: transfer_bone_weights / bind_selection_to_bone first"); return; }
+		FBoneWeights Weights;
+		for (const int32 Vid : M.VertexIndicesItr())
+		{
+			Skin->GetValue(Vid, Weights);
+			float Sum = 0.f;
+			for (int32 k = 0; k < Weights.Num(); ++k)
+			{
+				if (Targets.Contains(static_cast<int32>(Weights[k].GetBoneIndex()))) { Sum += Weights[k].GetWeight(); }
+			}
+			if (Sum > 0.f && Sum >= Threshold) { Vids.Add(Vid); }
+		}
+		bOk = true;
+	});
+	if (!bOk)
+	{
+		UE_LOG(LogVibe3DModeling, Warning, TEXT("SelectByBoneWeight: %s"), *Error);
+		return -1;
+	}
+	FGeometryScriptMeshSelection Selection;
+	UGeometryScriptLibrary_MeshSelectionFunctions::ConvertIndexArrayToMeshSelection(Mesh, Vids, EGeometryScriptMeshSelectionType::Vertices, Selection);
+	StoreSelection(Handle, SelectionName, Selection);
+	return Vids.Num();
+}
+
+FModelingResult UModelingService::ScaleBoneWeights(int32 Handle, const FString& SelectionName, const FString& BoneNames, float Scale, const FString& ReceiverBoneName)
+{
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	if (!Mesh) { return NoMesh(Handle); }
+	TArray<int32> Vids;
+	FString Error;
+	if (!SelectionVertices(Handle, SelectionName, Mesh, Vids, Error)) { return Fail(Handle, Error); }
+
+	const float S = FMath::Clamp(Scale, 0.f, 1.f);
+	const FString Receiver = ReceiverBoneName.TrimStartAndEnd();
+	int32 Count = 0;
+	int32 SkippedFullyBound = 0;
+	bool bOk = false;
+	Mesh->EditMesh([&](FDynamicMesh3& M)
+	{
+		if (!M.HasAttributes() || !M.Attributes()->HasBones()) { Error = TEXT("Mesh has no bones: run create_bones or load a skeletal mesh first"); return; }
+		TSet<int32> Targets;
+		if (!ParseBoneIndices(M.Attributes(), BoneNames, Targets, Error)) { return; }
+		int32 ReceiverIndex = INDEX_NONE;
+		if (!Receiver.IsEmpty())
+		{
+			ReceiverIndex = FindBoneIndexByName(M.Attributes(), FName(*Receiver));
+			if (ReceiverIndex == INDEX_NONE) { Error = FString::Printf(TEXT("No bone named '%s' (see list_bones)"), *Receiver); return; }
+			if (Targets.Contains(ReceiverIndex)) { Error = FString::Printf(TEXT("Receiver '%s' is also in BoneNames; the freed weight must go to a different bone"), *Receiver); return; }
+		}
+		FSkinWeights* Skin = DefaultSkinWeights(M);
+		if (!Skin) { Error = TEXT("Mesh has no skin weights: transfer_bone_weights / bind_selection_to_bone first"); return; }
+
+		FBoneWeights Existing;
+		for (const int32 Vid : Vids)
+		{
+			if (!M.IsVertex(Vid)) { continue; }
+			Skin->GetValue(Vid, Existing);
+			TMap<int32, float> W;
+			float TargetSum = 0.f;
+			for (int32 k = 0; k < Existing.Num(); ++k)
+			{
+				const int32 BoneIndex = static_cast<int32>(Existing[k].GetBoneIndex());
+				const float Weight = Existing[k].GetWeight();
+				if (Weight <= 0.f) { continue; }
+				W.FindOrAdd(BoneIndex) += Weight;
+				if (Targets.Contains(BoneIndex)) { TargetSum += Weight; }
+			}
+			if (TargetSum <= 0.f) { continue; }                 // vertex untouched by the listed bones
+
+			const float Freed = TargetSum * (1.f - S);
+			for (const int32 BoneIndex : Targets)
+			{
+				if (float* Found = W.Find(BoneIndex)) { *Found *= S; }
+			}
+
+			int32 Into = ReceiverIndex;
+			if (Into == INDEX_NONE)
+			{
+				float Best = 0.f;                                // strongest influence outside the target set
+				for (const TPair<int32, float>& Pair : W)
+				{
+					if (!Targets.Contains(Pair.Key) && Pair.Value > Best) { Best = Pair.Value; Into = Pair.Key; }
+				}
+			}
+			if (Into == INDEX_NONE) { ++SkippedFullyBound; continue; }  // nothing else owns this vertex; renormalizing would undo the scale
+
+			W.FindOrAdd(Into) += Freed;
+			TArray<FBoneWeight> NewWeights;
+			for (const TPair<int32, float>& Pair : W)
+			{
+				if (Pair.Value > 0.f) { NewWeights.Add(FBoneWeight(static_cast<FBoneIndexType>(Pair.Key), Pair.Value)); }
+			}
+			Skin->SetValue(Vid, FBoneWeights::Create(NewWeights));
+			++Count;
+		}
+		bOk = true;
+	});
+	if (!bOk) { return Fail(Handle, Error); }
+	FString Skipped = SkippedFullyBound > 0 ? FString::Printf(TEXT("; %d vertices bound only to those bones skipped (name a ReceiverBoneName to move them)"), SkippedFullyBound) : FString();
+	return Ok(Handle, Mesh, FString::Printf(TEXT("Scaled [%s] to %.2f on %d vertices, freed weight -> %s%s"),
+		*BoneNames, S, Count, Receiver.IsEmpty() ? TEXT("strongest other influence") : *Receiver, *Skipped));
+}
+
+FModelingResult UModelingService::SmoothSelectionBoneWeights(int32 Handle, const FString& SelectionName, int32 Iterations, float Alpha)
+{
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	if (!Mesh) { return NoMesh(Handle); }
+	TArray<int32> Vids;
+	FString Error;
+	if (!SelectionVertices(Handle, SelectionName, Mesh, Vids, Error)) { return Fail(Handle, Error); }
+	const int32 Iters = FMath::Clamp(Iterations, 1, 50);
+	const float A = FMath::Clamp(Alpha, 0.f, 1.f);
+
+	int32 Count = 0;
+	bool bOk = false;
+	Mesh->EditMesh([&](FDynamicMesh3& M)
+	{
+		FSkinWeights* Skin = DefaultSkinWeights(M);
+		if (!Skin) { Error = TEXT("Mesh has no skin weights: transfer_bone_weights / bind_selection_to_bone first"); return; }
+
+		const auto ReadWeights = [Skin](int32 Vid, TMap<int32, float>& Out)
+		{
+			FBoneWeights Weights;
+			Skin->GetValue(Vid, Weights);
+			for (int32 k = 0; k < Weights.Num(); ++k)
+			{
+				if (Weights[k].GetWeight() > 0.f) { Out.FindOrAdd(static_cast<int32>(Weights[k].GetBoneIndex())) += Weights[k].GetWeight(); }
+			}
+		};
+
+		for (int32 Iter = 0; Iter < Iters; ++Iter)
+		{
+			// Jacobi step: gather smoothed values from the current state, then apply, so edit order can't bias the result.
+			TArray<TPair<int32, TMap<int32, float>>> Pending;
+			Pending.Reserve(Vids.Num());
+			for (const int32 Vid : Vids)
+			{
+				if (!M.IsVertex(Vid)) { continue; }
+				TMap<int32, float> Avg;
+				int32 NumNeighbours = 0;
+				for (const int32 Nbr : M.VtxVerticesItr(Vid))
+				{
+					ReadWeights(Nbr, Avg);
+					++NumNeighbours;
+				}
+				if (NumNeighbours == 0) { continue; }
+				for (TPair<int32, float>& Pair : Avg) { Pair.Value /= static_cast<float>(NumNeighbours); }
+
+				TMap<int32, float> Own;
+				ReadWeights(Vid, Own);
+				TMap<int32, float> Blended;
+				for (const TPair<int32, float>& Pair : Own) { Blended.FindOrAdd(Pair.Key) += Pair.Value * (1.f - A); }
+				for (const TPair<int32, float>& Pair : Avg) { Blended.FindOrAdd(Pair.Key) += Pair.Value * A; }
+				Pending.Emplace(Vid, MoveTemp(Blended));
+			}
+			for (TPair<int32, TMap<int32, float>>& Entry : Pending)
+			{
+				TArray<FBoneWeight> NewWeights;
+				for (const TPair<int32, float>& Pair : Entry.Value)
+				{
+					if (Pair.Value > 0.005f) { NewWeights.Add(FBoneWeight(static_cast<FBoneIndexType>(Pair.Key), Pair.Value)); }  // drop dust so influences don't creep
+				}
+				if (NewWeights.Num() > 0)
+				{
+					Skin->SetValue(Entry.Key, FBoneWeights::Create(NewWeights));
+					if (Iter == 0) { ++Count; }
+				}
+			}
+		}
+		bOk = true;
+	});
+	if (!bOk) { return Fail(Handle, Error); }
+	return Ok(Handle, Mesh, FString::Printf(TEXT("Smoothed skin weights on %d vertices (%d iteration(s), alpha %.2f)"), Count, Iters, A));
+}
+
+FModelingResult UModelingService::InspectBoneWeights(int32 Handle, const FString& SelectionName)
+{
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	if (!Mesh) { return NoMesh(Handle); }
+	TArray<int32> Vids;
+	FString Error;
+	if (!SelectionVertices(Handle, SelectionName, Mesh, Vids, Error)) { return Fail(Handle, Error); }
+
+	struct FBoneStat { int32 Vertices = 0; float SumWeight = 0.f; float MaxWeight = 0.f; };
+	TMap<int32, FBoneStat> Stats;
+	float MinSum = TNumericLimits<float>::Max();
+	float MaxSum = 0.f;
+	int32 MaxInfluences = 0;
+	int32 OffNormalized = 0;
+	int32 Counted = 0;
+	TArray<FName> BoneNames;
+	bool bOk = false;
+	Mesh->ProcessMesh([&](const FDynamicMesh3& M)
+	{
+		const FSkinWeights* Skin = M.HasAttributes() ? M.Attributes()->GetSkinWeightsAttribute(FSkeletalMeshAttributes::DefaultSkinWeightProfileName) : nullptr;
+		if (!Skin) { Error = TEXT("Mesh has no skin weights: transfer_bone_weights / bind_selection_to_bone first"); return; }
+		if (M.Attributes()->HasBones())
+		{
+			for (int32 i = 0; i < M.Attributes()->GetNumBones(); ++i) { BoneNames.Add(M.Attributes()->GetBoneNames()->GetValue(i)); }
+		}
+		FBoneWeights Weights;
+		for (const int32 Vid : Vids)
+		{
+			if (!M.IsVertex(Vid)) { continue; }
+			Skin->GetValue(Vid, Weights);
+			float Sum = 0.f;
+			int32 Influences = 0;
+			for (int32 k = 0; k < Weights.Num(); ++k)
+			{
+				const float Weight = Weights[k].GetWeight();
+				if (Weight <= 0.f) { continue; }
+				FBoneStat& Stat = Stats.FindOrAdd(static_cast<int32>(Weights[k].GetBoneIndex()));
+				++Stat.Vertices;
+				Stat.SumWeight += Weight;
+				Stat.MaxWeight = FMath::Max(Stat.MaxWeight, Weight);
+				Sum += Weight;
+				++Influences;
+			}
+			MinSum = FMath::Min(MinSum, Sum);
+			MaxSum = FMath::Max(MaxSum, Sum);
+			MaxInfluences = FMath::Max(MaxInfluences, Influences);
+			if (FMath::Abs(Sum - 1.f) > 0.01f) { ++OffNormalized; }
+			++Counted;
+		}
+		bOk = true;
+	});
+	if (!bOk) { return Fail(Handle, Error); }
+	if (Counted == 0) { return Fail(Handle, FString::Printf(TEXT("Selection '%s' holds no vertices"), *SelectionName)); }
+
+	Stats.ValueSort([](const FBoneStat& A, const FBoneStat& B) { return A.Vertices > B.Vertices; });
+	FString Lines;
+	int32 Shown = 0;
+	for (const TPair<int32, FBoneStat>& Pair : Stats)
+	{
+		if (Shown++ >= 20) { Lines += FString::Printf(TEXT("\n  (+%d more bones)"), Stats.Num() - 20); break; }
+		const FString Name = BoneNames.IsValidIndex(Pair.Key) ? BoneNames[Pair.Key].ToString() : FString::Printf(TEXT("bone#%d"), Pair.Key);
+		Lines += FString::Printf(TEXT("\n  %s: %d verts, avg %.3f, max %.3f"), *Name, Pair.Value.Vertices, Pair.Value.SumWeight / Pair.Value.Vertices, Pair.Value.MaxWeight);
+	}
+	return Ok(Handle, Mesh, FString::Printf(TEXT("%d vertices, %d influencing bone(s), weight sums %.3f..%.3f, max influences %d, %d vertices off-normalized (>1%% from 1.0):%s"),
+		Counted, Stats.Num(), MinSum, MaxSum, MaxInfluences, OffNormalized, *Lines));
 }
 
 FModelingResult UModelingService::SetAssetMaterials(const FString& AssetPath, const FString& MaterialPaths, bool bSaveAsset)

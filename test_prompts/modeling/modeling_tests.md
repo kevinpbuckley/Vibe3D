@@ -218,13 +218,17 @@ Bake a 64 px tangent-space normal map and ambient occlusion from the noisy spher
 
 ## Goal
 Covers `load_mesh_from_skeletal_mesh`, `transfer_bone_weights`, `smooth_bone_weights`,
-`prune_bone_weights`, `save_mesh_to_skeletal_mesh`.
+`prune_bone_weights`, `save_mesh_to_skeletal_mesh`, `select_by_bone_weight`, `scale_bone_weights`,
+`smooth_selection_bone_weights`, `inspect_bone_weights`.
 
 ## Prompt 11.1
 Find a SkeletalMesh in the project, load its LOD 0 into a handle, remesh it to 5000 triangles, transfer bone weights back from the source asset, smooth them against its skeleton, and save as `/Game/Developers/Vibe3DModelingTests/SK_Remeshed` bound to the same skeleton.
 
 ## Prompt 11.2
 Prune the `root` bone from the remeshed mesh's skin weights and report the result message.
+
+## Prompt 11.3 — regional weight repair
+On the remeshed handle, run `inspect_bone_weights` with no selection and name the bone with the most influenced vertices. Select that bone's territory with `select_by_bone_weight` (threshold 0.25), report the selection's vertex count and bounds, then `scale_bone_weights` it to 0.5 with the freed weight going to the bone's parent, `smooth_selection_bone_weights` the same selection (3 iterations, alpha 0.5), and show `inspect_bone_weights` on the selection before and after: the bone's average weight should drop by roughly half, weight sums should stay 1.0 ± 0.01, and the message should note any fully-bound vertices that were skipped.
 
 ---
 
