@@ -197,7 +197,7 @@ Build the convex hull, a 2-hull convex decomposition, and a swept hull along Z o
 
 ## Goal
 Covers `save_mesh_to_static_mesh` (create and replace), `load_mesh_from_static_mesh`,
-`generate_collision`, `set_lods`, `spawn_static_mesh_actor`, `load_mesh_from_actor`,
+`generate_collision`, `set_lods`, `load_mesh_from_actor`,
 `bake_textures`.
 
 ## Prompt 10.1

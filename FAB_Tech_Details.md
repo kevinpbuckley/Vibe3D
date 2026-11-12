@@ -19,12 +19,13 @@ Copy/paste answers for the Fab listing form.
 **Engine Plugin Dependencies:** `GeometryScripting`, `GeometryProcessing`, `MeshModelingToolset`,
 `ToolsetRegistry`, `PythonScriptPlugin`, and `EditorScriptingUtilities`. All are declared in
 `Vibe3D.uplugin` and enabled automatically. `ToolsetRegistry` and `PythonScriptPlugin` are
-Experimental in Unreal Engine 5.9.
+Experimental in Unreal Engine 5.9. `EditorToolset` (Experimental) is declared as an **optional**
+dependency: it provides the engine tools Vibe3D defers to for texture import and actor placement.
 
 **Number of C++ Classes / source files:** 1 service class (`UModelingService`) plus the module
 implementation — 4 source files (2 `.cpp`, 1 `.h`, 1 test `.cpp`), ~4,800 lines.
 
-**Number of exposed functions:** 120 `AICallable` `UFUNCTION`s on `UModelingService`, all also
+**Number of exposed functions:** 122 `AICallable` `UFUNCTION`s on `UModelingService`, all also
 callable from editor Python as `unreal.ModelingService.<snake_case>(...)`.
 
 **Network Replicated:** No (editor-only tooling)

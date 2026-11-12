@@ -79,7 +79,7 @@ call("select_by_normal_angle", c, "top", unreal.Vector(0, 0, 1), 5.0)
 call("outset_faces", c, "top", 2.0)
 call("select_by_normal_angle", c, "side", unreal.Vector(1, 0, 0), 5.0)
 call("offset_faces", c, "side", 2.0)
-assert not svc.translate_selection(c, "side", unreal.Vector(1, 0, 0)).success, "stale selection must be refused after offset_faces changed topology"
+assert svc.translate_selection(c, "side", unreal.Vector(0, 0, 0)).success, "offset_faces keeps its selection on the faces it moved (5ed3cb4)"
 call("select_by_normal_angle", c, "side", unreal.Vector(1, 0, 0), 5.0)
 call("translate_selection", c, "side", unreal.Vector(1, 0, 0))
 call("set_material_id", c, "side", 3)
@@ -157,7 +157,8 @@ call("save_mesh_to_static_mesh", c, sm_path, True, True, False, True)   # replac
 lh = call("load_mesh_from_static_mesh", sm_path, 0).handle
 call("generate_collision", sm_path, "ConvexHulls", 2)
 call("set_lods", sm_path, [1.0, 0.5])
-sp_r = call("spawn_static_mesh_actor", sm_path, T(unreal.Vector(0, 0, -5000)), "Vibe3DModelingExerciseActor")
+eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)   # spawn_static_mesh_actor was cut: Epic LevelToolset.AddToSceneFromAsset covers it
+sp_a = eas.spawn_actor_from_object(unreal.load_asset(sm_path), unreal.Vector(0, 0, -5000)); sp_a.set_actor_label("Vibe3DModelingExerciseActor")
 ah = call("load_mesh_from_actor", "Vibe3DModelingExerciseActor", True, 0).handle
 bake = call("bake_textures", u, s, "TangentNormal,AmbientOcclusion", 64, ROOT, "Exercise", 0, 1); assert bake.texture_paths
 
@@ -183,6 +184,12 @@ call("create_bones", rg, [B(name="root"), B(name="flap", parent_name="root", tra
 call("bind_selection_to_bone", rg, "flap", "flap", 1.0)
 bones = call("list_bones", rg)
 assert len(bones) == 2 and bones[1].influenced_vertices == 8, [(str(b.name), b.influenced_vertices) for b in bones]
+# regional weight repair: report, select what a bone drags, hand half of it to root, soften the seam
+call("inspect_bone_weights", rg, "")
+n_flap = call("select_by_bone_weight", rg, "flap_region", "flap", 0.25)
+assert n_flap == 8, "flap should drag exactly the 8 vertices of the small box, got %s" % n_flap
+call("scale_bone_weights", rg, "flap_region", "flap", 0.5, "root")
+call("smooth_selection_bone_weights", rg, "flap_region", 2, 0.5)
 sk_path = ROOT + "/SK_ExerciseRig"
 call("save_mesh_to_skeletal_mesh", rg, sk_path, "", True, False)
 assert unreal.EditorAssetLibrary.does_asset_exist(sk_path + "_Skeleton"), "skeleton should be created next to the mesh"
@@ -210,7 +217,6 @@ call("create_noise_texture", ROOT + "/T_ExNoise", 64, 64, 4.0, 3, 0.5, 3, False)
 call("draw_on_texture", ROOT + "/T_ExNoise", "Line", [unreal.Vector2D(0.1, 0.1), unreal.Vector2D(0.9, 0.9)], unreal.LinearColor(1, 1, 1, 1), 3.0, 8.0, False)
 call("draw_on_texture", ROOT + "/T_ExNoise", "Dots", [unreal.Vector2D(0.1, 0.9), unreal.Vector2D(0.9, 0.1)], unreal.LinearColor(0, 0, 0, 1), 2.0, 6.0, False)
 xf = call("bake_texture_transfer", uv, uv, ROOT + "/T_ExNoise", 64, ROOT, "UVEx", 0, 0, 1); assert xf.texture_paths, xf.message
-call("import_texture", unreal.Paths.engine_content_dir() + "Slate/Checkerboard.png", ROOT + "/T_ExImported", False, "Masks", False)
 
 # --- surface detail: rivet stamps and a panel-line groove
 rv = call("create_mesh").handle

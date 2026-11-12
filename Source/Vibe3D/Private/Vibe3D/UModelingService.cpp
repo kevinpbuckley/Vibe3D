@@ -56,7 +56,6 @@
 #include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
 #include "AssetRegistry/AssetRegistryModule.h"
-#include "AssetImportTask.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Math/RandomStream.h"
@@ -1971,26 +1970,6 @@ FModelingBakeResult UModelingService::BakeTextureTransfer(int32 TargetHandle, in
 	return RunBake(Target, Source, Types, Suffixes, Resolution, OutputFolder, BaseName, TargetUVLayer, SamplesPerPixel);
 }
 
-FModelingResult UModelingService::SpawnStaticMeshActor(const FString& AssetPath, FTransform Transform, const FString& ActorLabel)
-{
-	UStaticMesh* StaticMesh = LoadAssetAs<UStaticMesh>(AssetPath);
-	if (!StaticMesh) { return Fail(-1, FString::Printf(TEXT("StaticMesh not found: %s"), *AssetPath)); }
-	UEditorActorSubsystem* ActorSubsystem = GEditor ? GEditor->GetEditorSubsystem<UEditorActorSubsystem>() : nullptr;
-	if (!ActorSubsystem) { return Fail(-1, TEXT("EditorActorSubsystem unavailable")); }
-	AActor* Actor = ActorSubsystem->SpawnActorFromObject(StaticMesh, Transform.GetLocation(), Transform.Rotator(), false);
-	if (!Actor) { return Fail(-1, FString::Printf(TEXT("Could not spawn an actor for %s"), *AssetPath)); }
-	Actor->SetActorScale3D(Transform.GetScale3D());
-	if (!ActorLabel.IsEmpty())
-	{
-		Actor->SetActorLabel(ActorLabel);
-	}
-	FModelingResult R;
-	R.bSuccess = true;
-	R.AssetPath = AssetPath;
-	R.Message = FString::Printf(TEXT("Spawned '%s' (%s) at %s"), *Actor->GetActorLabel(), *Actor->GetPathName(), *Transform.GetLocation().ToCompactString());
-	return R;
-}
-
 // =========================================================================
 // More primitives
 // =========================================================================
@@ -3179,17 +3158,6 @@ bool UModelingService::WorldToUV(int32 Handle, FVector Point, int32 UVLayer, FVe
 
 namespace
 {
-	bool ParseCompression(const FString& Name, TextureCompressionSettings& Out)
-	{
-		const FString N = Name.TrimStartAndEnd();
-		if (N.Equals(TEXT("Default"), ESearchCase::IgnoreCase)) { Out = TC_Default; return true; }
-		if (N.Equals(TEXT("Normalmap"), ESearchCase::IgnoreCase)) { Out = TC_Normalmap; return true; }
-		if (N.Equals(TEXT("Masks"), ESearchCase::IgnoreCase)) { Out = TC_Masks; return true; }
-		if (N.Equals(TEXT("Grayscale"), ESearchCase::IgnoreCase)) { Out = TC_Grayscale; return true; }
-		if (N.Equals(TEXT("HDR"), ESearchCase::IgnoreCase)) { Out = TC_HDR; return true; }
-		return false;
-	}
-
 	/** Perlin fBm that wraps at the image borders (blend of the four torus-shifted lookups). */
 	float TileableNoise(float U, float V, float Cells, const FVector2D& Offset)
 	{
@@ -3209,38 +3177,6 @@ namespace
 		Texture->BlockOnAnyAsyncBuild();
 		SaveIf(bSaveAsset, Texture->GetPathName());
 	}
-}
-
-FModelingResult UModelingService::ImportTexture(const FString& FilePath, const FString& AssetPath, bool bSRGB, const FString& Compression, bool bSaveAsset)
-{
-	if (!FPaths::FileExists(FilePath)) { return Fail(-1, FString::Printf(TEXT("File not found: %s"), *FilePath)); }
-	if (!AssetPath.StartsWith(TEXT("/"))) { return Fail(-1, FString::Printf(TEXT("AssetPath must be a content path like /Game/Textures/T_Name (got '%s')"), *AssetPath)); }
-	TextureCompressionSettings Settings = TC_Default;
-	if (!ParseCompression(Compression, Settings)) { return Fail(-1, FString::Printf(TEXT("Unknown compression '%s' (use Default, Normalmap, Masks, Grayscale, HDR)"), *Compression)); }
-
-	UAssetImportTask* Task = NewObject<UAssetImportTask>();
-	Task->Filename = FilePath;
-	Task->DestinationPath = FPackageName::GetLongPackagePath(AssetPath);
-	Task->DestinationName = FPackageName::GetLongPackageAssetName(AssetPath);
-	Task->bAutomated = true;
-	Task->bReplaceExisting = true;
-	Task->bSave = false;
-	FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get().ImportAssetTasks({ Task });
-	UTexture2D* Texture = Task->GetObjects().Num() > 0 ? Cast<UTexture2D>(Task->GetObjects()[0]) : nullptr;
-	if (!Texture) { return Fail(-1, FString::Printf(TEXT("Import of %s produced no Texture2D (unsupported format?)"), *FilePath)); }
-	Texture->SRGB = bSRGB;
-	Texture->CompressionSettings = Settings;
-	if (Settings == TC_Normalmap)
-	{
-		Texture->SRGB = false;
-		Texture->LODGroup = TEXTUREGROUP_WorldNormalMap;
-	}
-	FinishTextureEdit(Texture, bSaveAsset);
-	FModelingResult R;
-	R.bSuccess = true;
-	R.AssetPath = Texture->GetPathName();
-	R.Message = FString::Printf(TEXT("Imported %s as %s (%dx%d, %s, sRGB %s)"), *FPaths::GetCleanFilename(FilePath), *R.AssetPath, Texture->GetSizeX(), Texture->GetSizeY(), *Compression, bSRGB ? TEXT("on") : TEXT("off"));
-	return R;
 }
 
 FModelingResult UModelingService::CreateNoiseTexture(const FString& AssetPath, int32 Width, int32 Height, float Scale, int32 Octaves, float Persistence, int32 Seed, bool bSaveAsset)

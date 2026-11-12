@@ -16,7 +16,7 @@ operators as one editor toolset, no viewport required.
 **Vibe3D turns Unreal's Modeling Mode into an API.**
 
 The 97 interactive modeling tools are built on a layer of geometry operators. Vibe3D exposes that
-layer — 120 functions — as a single AICallable service on Unreal Engine 5.9's native toolset
+layer — 122 functions — as a single AICallable service on Unreal Engine 5.9's native toolset
 registry, and as plain editor Python. An agent connected to the editor's MCP endpoint, a build
 script, or a tools programmer in the Python console can all drive the same API.
 
@@ -44,7 +44,7 @@ collision and LODs. Nothing needs a gizmo, a viewport or a round trip through Bl
 - **Rigging** — author bones and skin weights on the session mesh, bind selections to bones, and
   save a SkeletalMesh with its Skeleton created for you.
 - **Assets** — save / replace StaticMesh and SkeletalMesh, assign material slots, generate collision
-  (convex hulls, boxes, spheres, capsules, swept hulls), set LODs, spawn actors.
+  (convex hulls, boxes, spheres, capsules, swept hulls), set LODs.
 - **Deformation and voxels** — bend, twist, flare, noise, texture displacement, solidify, morphology.
 
 **Built for agents**

@@ -58,10 +58,10 @@ gives the exact Python signatures (`describe_tools` gives the MCP schemas, but i
 | Poly-edit & processing | `extrude/offset/inset/outset/delete_faces`, `bevel_polygroups`, `offset_mesh`, `shell_mesh`, `remesh`, `simplify_*`, `subdivide`, `smooth`, `fill_holes`, `weld_edges`, `repair`, `remove_hidden_triangles`, `split_by_components` |
 | Deform & voxel | `bend`, `twist`, `flare`, `noise`, `displace_from_texture`, `voxel_solidify`, `voxel_morphology` |
 | UVs | `auto_uv`, `project_uv`, `set_polygroup` + `recompute_uvs`, `transform_uv`, `layout_uv`, `pack_uv_per_material`, `get_uv_stats`, `world_to_uv` |
-| Textures | `bake_textures` (normals, AO, curvature, position, VertexColor, MaterialID, UVShell, Height), `bake_texture_transfer`, `import_texture`, `create_noise_texture`, `draw_on_texture` |
+| Textures | `bake_textures` (normals, AO, curvature, position, VertexColor, MaterialID, UVShell, Height), `bake_texture_transfer`, `create_noise_texture`, `draw_on_texture`. Importing an image file is Epic's: `EditorToolset.TextureToolset.ImportFile`, then `EditorToolset.ObjectToolset.SetProperties` for SRGB / CompressionSettings |
 | Detail | `append_mesh_at_transforms`, `append_mesh_along_polyline`, `sample_surface_points`, `ray_cast`, `nearest_point`, `measure_distance` |
 | Rigging | `create_bones`, `bind_selection_to_bone`, `list_bones`, `transfer_bone_weights`, `smooth_bone_weights`, `prune_bone_weights` |
-| Assets | `save_mesh_to_static_mesh`, `save_mesh_to_skeletal_mesh` (empty skeleton path creates `<Asset>_Skeleton`), `set_asset_materials`, `generate_collision`, `set_lods`, `spawn_static_mesh_actor` |
+| Assets | `save_mesh_to_static_mesh`, `save_mesh_to_skeletal_mesh` (empty skeleton path creates `<Asset>_Skeleton`), `set_asset_materials`, `generate_collision`, `set_lods`. Placing the saved mesh in the level is Epic's: `EditorToolset.LevelToolset.AddToSceneFromAsset` (`name` sets the actor label) |
 
 ## 3. Rules that save a rebuild
 

@@ -27,7 +27,7 @@ public class Vibe3D : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"UnrealEd",                 // editor subsystems, UAssetImportTask, automation
+				"UnrealEd",                 // editor subsystems, automation
 				"EditorSubsystem",
 				"EditorScriptingUtilities", // UEditorAssetLibrary
 				"AssetRegistry",

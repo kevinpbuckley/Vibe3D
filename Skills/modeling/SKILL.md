@@ -47,7 +47,7 @@ here needs a viewport, a gizmo, or Blender.
 
 1. `create_mesh()` / `load_mesh_from_static_mesh(path)` / `load_mesh_from_actor(label)` → a result; check `success`, then use its integer **`.handle`**.
 2. Every op mutates the handle's mesh in place and returns an `FModelingResult` (`success`, `message`, `triangle_count`, `vertex_count`).
-3. `save_mesh_to_static_mesh(handle, "/Game/Props/SM_Crate")` writes the asset (creates or replaces); `spawn_static_mesh_actor(...)` places it.
+3. `save_mesh_to_static_mesh(handle, "/Game/Props/SM_Crate")` writes the asset (creates or replaces); Epic's `EditorToolset.LevelToolset.AddToSceneFromAsset` (`assetPath`, `name`, `xform`) places it in the level.
 4. `release_mesh(handle)` when done (or `release_all_meshes()`); handles are session-scoped and not saved.
 
 Operations that take a **selection** use a named selection created on the same handle
@@ -74,7 +74,7 @@ r = svc.save_mesh_to_static_mesh(h, "/Game/Props/SM_Crate", True, True)     # na
 print("CREATED:", r.asset_path, r.triangle_count, "tris")
 svc.generate_collision("/Game/Props/SM_Crate", "ConvexHulls", 4)
 svc.set_lods("/Game/Props/SM_Crate", [1.0, 0.5, 0.25])
-svc.spawn_static_mesh_actor("/Game/Props/SM_Crate", unreal.Transform(unreal.Vector(0, 0, 0)), "Crate_01")
+await call_tool("EditorToolset.LevelToolset.AddToSceneFromAsset", assetPath="/Game/Props/SM_Crate", name="Crate_01", xform=unreal.Transform())
 svc.release_all_meshes()
 ```
 
@@ -109,7 +109,7 @@ path given (see **Reference pages** at the end).
 | Voxel | `voxel_solidify(handle, grid_resolution)`, `voxel_morphology(handle, "Dilate|Contract|Open|Close", distance, grid_resolution)` |
 | UVs / normals / groups / materials / colors | `auto_uv(handle, "XAtlas|PatchBuilder", uv_layer)`, `project_uv(handle, "Planar|Box|Cylinder", transform, uv_layer, sel)`, `repack_uv(handle, uv_layer, resolution)`, `set_num_uv_layers`, `recompute_normals(handle, hard_angle_deg)`, `flip_normals`, `ensure_outward(handle)` (flip if the enclosed volume is negative), `compute_polygroups(handle, "Angle|UVIslands|Components|Polygons", crease_angle)`, `set_material_id(handle, sel, id)`, `remap_material_id(handle, from, to)`, `set_vertex_color(handle, sel, color)`, `set_polygroup(handle, sel, group_id=-1)`, `recompute_uvs(handle, uv_layer, "Polygroups|UVIslands", "SpectralConformal|Conformal|ExpMap", sel)`, `transform_uv(handle, uv_layer, sel, translation, scale, rotation_deg, origin)`, `layout_uv(handle, uv_layer, "Repack|Stack|Normalize|Transform", sel, resolution)`, `pack_uv_per_material(handle, uv_layer, resolution)`, `get_uv_stats(handle, uv_layer)` → islands/coverage/overlap/texel density, `world_to_uv(handle, point, uv_layer)` |
 | Transform | `transform_mesh(handle, transform)`, `translate_mesh`, `rotate_mesh`, `scale_mesh`, `recenter_mesh(handle, "Bounds|Base")` |
-| Assets | `save_mesh_to_static_mesh(handle, path, replace_existing, enable_collision, enable_nanite)`, `save_mesh_to_skeletal_mesh(handle, path, skeleton_path="")` ("" creates `<path>_Skeleton` from the mesh bones), `set_asset_materials(asset_path, "/Game/M_A,/Game/M_B")`, `transfer_bone_weights(handle, source_skeletal_mesh_path)`, `smooth_bone_weights(handle, skeleton_path)`, `prune_bone_weights(handle, "bone,bone")`, `scale_bone_weights(handle, sel, "bone,bone", scale, receiver_bone="")` (regional weight repair; freed weight -> receiver or strongest other influence), `smooth_selection_bone_weights(handle, sel, iterations=3, alpha=0.5)` (feather weight seams), `inspect_bone_weights(handle, sel="")` (per-bone verts/avg/max, weight sums, max influences), `create_bones(handle, [ModelingBoneDef(name, parent_name, transform)])`, `bind_selection_to_bone(handle, sel, bone, weight=1)`, `list_bones(handle)` → per-bone vertex counts, `generate_collision(asset_path, "MinVolumeShapes|ConvexHulls|AlignedBoxes|OrientedBoxes|MinimalSpheres|Capsules|SweptHulls", max_hulls)`, `set_lods(asset_path, [percent_triangles...])`, `bake_textures(target_handle, source_handle, "TangentNormal,AmbientOcclusion,Curvature,ObjectNormal,Position,VertexColor,MaterialID,UVShell,Height", resolution, out_folder, base_name)`, `bake_texture_transfer(target, source, "T_A,T_B", resolution, out_folder, base_name)`, `import_texture(file, asset_path, srgb, "Default|Normalmap|Masks|Grayscale|HDR")`, `create_noise_texture(asset_path, w, h, cells, octaves)`, `draw_on_texture(asset_path, "Line|Dots|Rect|Fill", uv_points, color, thickness_px, spacing_px)`, `spawn_static_mesh_actor(asset_path, transform, label)`; `load_mesh_from_actor` also reads skeletal / dynamic mesh actors |
+| Assets | `save_mesh_to_static_mesh(handle, path, replace_existing, enable_collision, enable_nanite)`, `save_mesh_to_skeletal_mesh(handle, path, skeleton_path="")` ("" creates `<path>_Skeleton` from the mesh bones), `set_asset_materials(asset_path, "/Game/M_A,/Game/M_B")`, `transfer_bone_weights(handle, source_skeletal_mesh_path)`, `smooth_bone_weights(handle, skeleton_path)`, `prune_bone_weights(handle, "bone,bone")`, `scale_bone_weights(handle, sel, "bone,bone", scale, receiver_bone="")` (regional weight repair; freed weight -> receiver or strongest other influence), `smooth_selection_bone_weights(handle, sel, iterations=3, alpha=0.5)` (feather weight seams), `inspect_bone_weights(handle, sel="")` (per-bone verts/avg/max, weight sums, max influences), `create_bones(handle, [ModelingBoneDef(name, parent_name, transform)])`, `bind_selection_to_bone(handle, sel, bone, weight=1)`, `list_bones(handle)` → per-bone vertex counts, `generate_collision(asset_path, "MinVolumeShapes|ConvexHulls|AlignedBoxes|OrientedBoxes|MinimalSpheres|Capsules|SweptHulls", max_hulls)`, `set_lods(asset_path, [percent_triangles...])`, `bake_textures(target_handle, source_handle, "TangentNormal,AmbientOcclusion,Curvature,ObjectNormal,Position,VertexColor,MaterialID,UVShell,Height", resolution, out_folder, base_name)`, `bake_texture_transfer(target, source, "T_A,T_B", resolution, out_folder, base_name)`, `create_noise_texture(asset_path, w, h, cells, octaves)`, `draw_on_texture(asset_path, "Line|Dots|Rect|Fill", uv_points, color, thickness_px, spacing_px)`; image import is Epic's `EditorToolset.TextureToolset.ImportFile` + `EditorToolset.ObjectToolset.SetProperties`, and placing an asset in the level is `EditorToolset.LevelToolset.AddToSceneFromAsset`; `load_mesh_from_actor` also reads skeletal / dynamic mesh actors |
 
 ## GeometryScript coverage
 
@@ -188,7 +188,7 @@ can pass to any `unreal.GeometryScript_*` library function in the same script.
 - Calling `extrude_faces` with `""` (whole mesh) — that shells the whole object outward. Select faces first.
 - Forgetting `auto_uv` before `bake_textures` or before saving a mesh that will take a textured material.
 - `set_lods` with `[1.0]` only — that removes extra LODs. Give one entry per LOD, LOD0 first.
-- Loading a mesh from an actor and saving back to a *new* path, then wondering why the level didn't change — spawn or reassign the actor's mesh.
+- Loading a mesh from an actor and saving back to a *new* path, then wondering why the level didn't change — spawn (`EditorToolset.LevelToolset.AddToSceneFromAsset`) or reassign the actor's mesh.
 - **Passing `material_id` positionally.** These wrappers have long tails of optional arguments
   (`append_stairs(handle, transform, step_width, step_height, step_depth, num_steps, floating, material_id)`),
   so one missing argument silently feeds your material id to `floating`. Pass the tail by keyword:
@@ -375,8 +375,19 @@ texel density. For anything an artist would paint, build the islands yourself an
 6. **Pixels.** `create_noise_texture(path, 2048, 2048, cells, octaves)` for tileable grunge/wear;
    `draw_on_texture(path, "Line|Dots|Rect|Fill", uv_points, color, thickness_px, spacing_px)` to draw
    rivet rows, stripes and blocks straight into an 8-bit texture in UV space (use `world_to_uv` to
-   place them); `import_texture(file, path, srgb, "Default|Normalmap|Masks|Grayscale")` for anything
-   made elsewhere (a PolyHaven PBR set downloaded with `urllib` in the same Python script works).
+   place them). For textures made elsewhere (a PolyHaven PBR set downloaded with `urllib` in the same Python script works),
+   use Epic `ImportFile` then `SetProperties` inside `execute_python`. `ImportFile` is async: `await` it before `SetProperties`.
+   `instance` is the imported texture's object path; `values` is a JSON STRING (`json.dumps`), not a dict.
+   `CompressionSettings` = `TC_Default|TC_Normalmap|TC_Masks|TC_Grayscale|TC_HDR`; normal maps also want `LODGroup` = `TEXTUREGROUP_WorldNormalMap`:
+   ```python
+   import json
+   await call_tool("EditorToolset.TextureToolset.ImportFile", folderPath="/Game/Textures", assetName="T_Rust_N",
+                   sourceFile="C:/dl/rust_n.png", bReplaceExisting=True, bSave=False)
+   await call_tool("EditorToolset.ObjectToolset.SetProperties", instance="/Game/Textures/T_Rust_N.T_Rust_N",
+                   values=json.dumps({"SRGB": False, "CompressionSettings": "TC_Normalmap", "LODGroup": "TEXTUREGROUP_WorldNormalMap"}))
+   ```
+   The result is unsaved after `SetProperties`: save it afterwards (`unreal.EditorAssetLibrary.save_asset("/Game/Textures/T_Rust_N")`);
+   `ImportFile`'s `bSave` would run before the property edit.
    `bake_texture_transfer(target, source, "T_A,T_B", …)` re-projects textures from one unwrap onto
    another (after re-unwrapping, or from a detail mesh).
 7. **Geometry detail for normal maps.** Build it on a copy: `append_mesh_along_polyline(h, rivet, points,

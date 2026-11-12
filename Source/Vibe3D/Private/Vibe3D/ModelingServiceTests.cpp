@@ -346,8 +346,10 @@ bool FVibe3DModelingAssetsTest::RunTest(const FString&)
 	const FModelingResult LODs = UModelingService::SetLODs(AssetPath, { 1.f, 0.5f }, true, false);
 	TestTrue(FString::Printf(TEXT("lods: %s"), *LODs.Message), LODs.bSuccess);
 
-	const FModelingResult Spawned = UModelingService::SpawnStaticMeshActor(AssetPath, FTransform(FVector(0, 0, -5000)), TEXT("Vibe3DModelingTestActor"));
-	TestTrue(TEXT("spawn"), Spawned.bSuccess);
+	UEditorActorSubsystem* SpawnSubsystem = GEditor ? GEditor->GetEditorSubsystem<UEditorActorSubsystem>() : nullptr;
+	AActor* Spawned = SpawnSubsystem ? SpawnSubsystem->SpawnActorFromObject(LoadObject<UStaticMesh>(nullptr, *AssetPath), FVector(0, 0, -5000), FRotator::ZeroRotator, false) : nullptr;
+	TestNotNull(TEXT("spawn"), Spawned);
+	if (Spawned) { Spawned->SetActorLabel(TEXT("Vibe3DModelingTestActor")); }
 	const FModelingResult FromActor = UModelingService::LoadMeshFromActor(TEXT("Vibe3DModelingTestActor"), true, 0);
 	TestTrue(TEXT("load from actor"), FromActor.bSuccess && FromActor.TriangleCount == 12);
 	TestTrue(TEXT("world space applied"), UModelingService::GetMeshInfo(FromActor.Handle).BoundsMin.Z < -4000.0);
@@ -508,7 +510,7 @@ bool FVibe3DModelingUVsTexturingTest::RunTest(const FString&)
 	TestTrue(FString::Printf(TEXT("mask bakes: %s"), *Masks.Message), Masks.bSuccess);
 	TestEqual(TEXT("four mask textures"), Masks.TexturePaths.Num(), 4);
 
-	// --- Image tools: noise, drawing, import, texture transfer
+	// --- Image tools: noise, drawing, texture transfer (image import is Epic's TextureToolset.ImportFile)
 	const FString NoisePath = Dir + TEXT("/T_Noise");
 	const FModelingResult Noise = UModelingService::CreateNoiseTexture(NoisePath, 64, 64, 4.f, 3, 0.5f, 7, false);
 	TestTrue(FString::Printf(TEXT("noise: %s"), *Noise.Message), Noise.bSuccess);
@@ -519,24 +521,13 @@ bool FVibe3DModelingUVsTexturingTest::RunTest(const FString&)
 	TestFalse(TEXT("unknown shape rejected"), UModelingService::DrawOnTexture(NoisePath, TEXT("Spiral"), {}, FLinearColor::White).bSuccess);
 	TestFalse(TEXT("draw on missing texture rejected"), UModelingService::DrawOnTexture(Dir + TEXT("/T_Nope"), TEXT("Fill"), {}, FLinearColor::White).bSuccess);
 
-	const FString PngPath = FPaths::ProjectSavedDir() / TEXT("Vibe3DModelingTest.png");
-	{
-		TArray<FColor> Pixels;
-		Pixels.Init(FColor(200, 40, 40, 255), 8 * 8);
-		TArray64<uint8> Png;
-		FImageUtils::PNGCompressImageArray(8, 8, Pixels, Png);
-		TestTrue(TEXT("test png written"), FFileHelper::SaveArrayToFile(Png, *PngPath));
-	}
-	const FModelingResult Imported = UModelingService::ImportTexture(PngPath, Dir + TEXT("/T_Imported"), false, TEXT("Masks"), false);
-	TestTrue(FString::Printf(TEXT("import: %s"), *Imported.Message), Imported.bSuccess);
-	TestTrue(TEXT("imported asset exists"), UEditorAssetLibrary::DoesAssetExist(Dir + TEXT("/T_Imported")));
-	TestFalse(TEXT("missing file rejected"), UModelingService::ImportTexture(PngPath + TEXT(".missing"), Dir + TEXT("/T_Nope"), false).bSuccess);
-	TestFalse(TEXT("bad compression rejected"), UModelingService::ImportTexture(PngPath, Dir + TEXT("/T_Nope"), false, TEXT("Crunchy")).bSuccess);
-
 	const FModelingBakeResult Transfer = UModelingService::BakeTextureTransfer(H, H, NoisePath, 64, Dir, TEXT("Xfer"));
 	TestTrue(FString::Printf(TEXT("texture transfer: %s"), *Transfer.Message), Transfer.bSuccess);
-	const FModelingBakeResult MultiTransfer = UModelingService::BakeTextureTransfer(H, H, NoisePath + TEXT(",") + Dir + TEXT("/T_Imported"), 64, Dir, TEXT("Xfer2"));
-	TestTrue(FString::Printf(TEXT("multi-texture transfer: %s"), *MultiTransfer.Message), MultiTransfer.bSuccess);
+	if (TestTrue(TEXT("mask bake produced a texture for the multi-transfer source"), Masks.TexturePaths.Num() > 0))
+	{
+		const FModelingBakeResult MultiTransfer = UModelingService::BakeTextureTransfer(H, H, NoisePath + TEXT(",") + Masks.TexturePaths[0], 64, Dir, TEXT("Xfer2"));
+		TestTrue(FString::Printf(TEXT("multi-texture transfer: %s"), *MultiTransfer.Message), MultiTransfer.bSuccess);
+	}
 	TestFalse(TEXT("missing source texture rejected"), UModelingService::BakeTextureTransfer(H, H, Dir + TEXT("/T_Nope"), 64, Dir, TEXT("X")).bSuccess);
 
 	// --- Surface detail: stamps and grooves
@@ -558,7 +549,6 @@ bool FVibe3DModelingUVsTexturingTest::RunTest(const FString&)
 	TestTrue(TEXT("grooved slab still closed"), SlabInfo.bIsClosed);
 	TestFalse(TEXT("groove needs two points"), UModelingService::CutGrooveAlongPolyline(Slab, { FVector::ZeroVector }, 2.f, 1.f).bSuccess);
 
-	IFileManager::Get().Delete(*PngPath);
 	FAssetCompilingManager::Get().FinishAllCompilation();
 	UModelingService::ReleaseAllMeshes();
 	TestTrue(TEXT("test folder removed"), UEditorAssetLibrary::DeleteDirectory(kModelingTestDir));

@@ -1,3 +1,8 @@
+> [!WARNING]
+> **Unreal Engine 5.9 build: not fully tested yet.** This `5-9` branch builds and loads in UE 5.9, but
+> it has not been tested end to end. Expect rough edges and report problems as issues. For production
+> work, use the stable `main` branch.
+
 # Vibe3D
 
 Procedural 3D modeling as an **AI Editor Toolset** for Unreal Engine 5.9. Vibe3D exposes the
@@ -23,7 +28,7 @@ but does not depend on it.
 ## What you get
 
 - **Toolset `Vibe3D.ModelingService`** on the MCP endpoint (`list_toolsets` / `describe_tools`) —
-  ~120 tools. Same functions from Python: `unreal.ModelingService.<snake_case>(...)`.
+  ~122 tools. Same functions from Python: `unreal.ModelingService.<snake_case>(...)`.
 - **Skill `/Skills/Vibe3D/modeling`** (`Skills/modeling/SKILL.md`): the session model, frame semantics
   for sweeps and lofts, the texturing pipeline (islands → unwrap → pack → verify → masks → pixels →
   detail normals), rigging control surfaces, gotchas. UE 5.9 discovers `<Plugin>/Skills/**/SKILL.md`

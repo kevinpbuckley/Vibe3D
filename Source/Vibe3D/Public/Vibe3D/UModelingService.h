@@ -655,10 +655,6 @@ public:
 	static FModelingBakeResult BakeTextures(int32 TargetHandle, int32 SourceHandle, const FString& BakeTypes, int32 Resolution, const FString& OutputFolder,
 		const FString& BaseName, int32 TargetUVLayer = 0, int32 SamplesPerPixel = 1);
 
-	/** Place a StaticMesh asset in the current level as a StaticMeshActor. */
-	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Spawn Static Mesh Actor"))
-	static FModelingResult SpawnStaticMeshActor(const FString& AssetPath, FTransform Transform, const FString& ActorLabel = TEXT(""));
-
 	// =====================================================================
 	// More primitives
 	// =====================================================================
@@ -849,10 +845,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Bake Texture Transfer"))
 	static FModelingBakeResult BakeTextureTransfer(int32 TargetHandle, int32 SourceHandle, const FString& SourceTexturePaths, int32 Resolution, const FString& OutputFolder,
 		const FString& BaseName, int32 TargetUVLayer = 0, int32 SourceUVLayer = 0, int32 SamplesPerPixel = 1);
-
-	/** Import an image file (png, jpg, tga, exr, ...) as a Texture2D asset. Compression: "Default", "Normalmap", "Masks", "Grayscale", "HDR". */
-	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Import Texture"))
-	static FModelingResult ImportTexture(const FString& FilePath, const FString& AssetPath, bool bSRGB = true, const FString& Compression = TEXT("Default"), bool bSaveAsset = true);
 
 	/** Tileable fractal (Perlin fBm) grayscale texture — grunge, wear masks, height detail. Scale is the number of noise cells across the image. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Create Noise Texture"))
