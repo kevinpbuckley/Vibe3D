@@ -12,14 +12,14 @@ Copy/paste answers for the Fab listing form.
 |---|---|---|
 | Vibe3D | Editor | Default |
 
-**Supported Engine Versions:** 5.8
+**Supported Engine Versions:** 5.9
 
 **Supported Target Build Platforms:** Win64, Linux, Mac
 
 **Engine Plugin Dependencies:** `GeometryScripting`, `GeometryProcessing`, `MeshModelingToolset`,
 `ToolsetRegistry`, `PythonScriptPlugin`, and `EditorScriptingUtilities`. All are declared in
 `Vibe3D.uplugin` and enabled automatically. `ToolsetRegistry` and `PythonScriptPlugin` are
-Experimental in Unreal Engine 5.8.
+Experimental in Unreal Engine 5.9.
 
 **Number of C++ Classes / source files:** 1 service class (`UModelingService`) plus the module
 implementation — 4 source files (2 `.cpp`, 1 `.h`, 1 test `.cpp`), ~4,800 lines.
@@ -41,14 +41,14 @@ and re-loadable with the `Vibe3D.ReloadSkills` console command. Agent-guide gene
 - Content is non-asset only (the agent skill, a Python bootstrap and a sample guide) — there are no
   `.uasset` or `.umap` files, so nothing to cook.
 
-**Prerequisites:** Unreal Engine 5.8 with the C++ toolchain installed (the plugin is a code plugin).
+**Prerequisites:** Unreal Engine 5.9 with the C++ toolchain installed (the plugin is a code plugin).
 An MCP-capable agent client is optional — every function is equally usable from the editor's Python
 console or from Blueprint-free editor scripting.
 
 ## Technical notes for the listing body
 
-- Editor-only plugin (module type `Editor`) for Unreal Engine 5.8, Win64 / Linux / Mac.
+- Editor-only plugin (module type `Editor`) for Unreal Engine 5.9, Win64 / Linux / Mac.
 - Depends on the engine plugins GeometryScripting, GeometryProcessing, MeshModelingToolset,
   ToolsetRegistry, PythonScriptPlugin and EditorScriptingUtilities — all enabled automatically.
-  ToolsetRegistry and PythonScriptPlugin are Experimental in 5.8.
+  ToolsetRegistry and PythonScriptPlugin are Experimental in 5.9.
 - No third-party libraries, no network calls, no telemetry.

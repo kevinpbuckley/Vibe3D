@@ -16,7 +16,7 @@ operators as one editor toolset, no viewport required.
 **Vibe3D turns Unreal's Modeling Mode into an API.**
 
 The 97 interactive modeling tools are built on a layer of geometry operators. Vibe3D exposes that
-layer — 120 functions — as a single AICallable service on Unreal Engine 5.8's native toolset
+layer — 120 functions — as a single AICallable service on Unreal Engine 5.9's native toolset
 registry, and as plain editor Python. An agent connected to the editor's MCP endpoint, a build
 script, or a tools programmer in the Python console can all drive the same API.
 
@@ -65,8 +65,8 @@ Anything the service does not wrap is still reachable: `get_dynamic_mesh(handle)
 
 ## Technical notes for the listing body
 
-- Editor-only plugin (module type `Editor`) for Unreal Engine 5.8, Win64 / Linux / Mac.
+- Editor-only plugin (module type `Editor`) for Unreal Engine 5.9, Win64 / Linux / Mac.
 - Depends on the engine plugins GeometryScripting, GeometryProcessing, MeshModelingToolset,
   ToolsetRegistry, PythonScriptPlugin and EditorScriptingUtilities — all enabled automatically.
-  ToolsetRegistry and PythonScriptPlugin are Experimental in 5.8.
+  ToolsetRegistry and PythonScriptPlugin are Experimental in 5.9.
 - No third-party libraries, no network calls, no telemetry.

@@ -1,6 +1,6 @@
 # Copyright Buckley Builds LLC 2026 All Rights Reserved.
 #
-# Registers Vibe3D's markdown skill packs as native Unreal Engine 5.8 agent skills, so they are
+# Registers Vibe3D's markdown skill packs as native Unreal Engine 5.9 agent skills, so they are
 # discovered through Epic's own ToolsetRegistry.AgentSkillToolset (ListSkills / GetSkills) on the
 # MCP endpoint. Each Content/Skills/<name>/SKILL.md becomes one skill; each sibling *.md becomes its
 # own sub-doc skill. Re-run with the console command `Vibe3D.ReloadSkills` after editing markdown.

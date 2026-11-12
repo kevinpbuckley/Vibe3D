@@ -23,7 +23,7 @@ Status of the plugin against Epic's Fab requirements for a **code plugin**. Mirr
 ## Code plugin
 
 ### .uplugin configuration
-- [x] `EngineVersion` = **"5.8.0"**
+- [x] `EngineVersion` = **"5.9.0"**
 - [x] `PlatformAllowList` = Win64 + Linux + Mac (matches the supported target platforms)
 - [x] `EnabledByDefault` = **false** — a Fab plugin must not force-enable itself in every project
 - [x] `VersionName` = **"1.0"**, `IsBetaVersion` = false
@@ -65,13 +65,13 @@ Status of the plugin against Epic's Fab requirements for a **code plugin**. Mirr
       ```
       RunUAT.bat BuildPlugin -Plugin="<path>\Vibe3D.uplugin" -Package="<out>" -TargetPlatforms=Win64+Linux+Mac
       ```
-- [ ] Packaged plugin installed into a clean UE 5.8 project (not Proteus) and verified:
+- [ ] Packaged plugin installed into a clean UE 5.9 project (not Proteus) and verified:
       the toolset appears in `list_toolsets` as `Vibe3D.ModelingService` and the `modeling`
       skill registers
 
 ## Known caveats to disclose on the listing
 
-- Vibe3D depends on two engine plugins that ship as **Experimental** in 5.8 and are not enabled by
+- Vibe3D depends on two engine plugins that ship as **Experimental** in 5.9 and are not enabled by
   default: `ToolsetRegistry` and `PythonScriptPlugin`. Both are pulled in automatically as plugin
   dependencies, but the listing should say so.
 - The toolset is editor-only (module `Type: Editor`); nothing is available in a packaged game.

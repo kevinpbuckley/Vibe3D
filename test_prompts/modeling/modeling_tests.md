@@ -11,7 +11,7 @@ For a no-agent check of the same surface, run `Content/Skills/modeling/scripts/e
 
 ## Prerequisites
 
-- UE 5.8 editor with Vibe3D enabled and the MCP server running.
+- UE 5.9 editor with Vibe3D enabled and the MCP server running.
 - No assets required; the Skeletal section needs any SkeletalMesh in the project (skip otherwise).
 
 ## Test Order

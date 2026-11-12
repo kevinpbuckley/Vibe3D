@@ -1,6 +1,6 @@
 # Vibe3D
 
-Procedural 3D modeling as an **AI Editor Toolset** for Unreal Engine 5.8. Vibe3D exposes the
+Procedural 3D modeling as an **AI Editor Toolset** for Unreal Engine 5.9. Vibe3D exposes the
 operators behind Modeling Mode — primitives, booleans, lofts, poly-edit, remeshing, deformation,
 voxels, UVs, baking, rigging, collision, LODs — as one AICallable service on Unreal's native
 ToolsetRegistry / MCP endpoint, plus a companion agent skill that teaches the workflow.
@@ -15,7 +15,7 @@ cd <YourProject>/Plugins
 git clone https://github.com/kevinpbuckley/Vibe3D.git
 ```
 
-Build the project, then enable **Vibe3D** in Edit > Plugins (Editor category) and restart. Requires UE 5.8 with the engine plugins
+Build the project, then enable **Vibe3D** in Edit > Plugins (Editor category) and restart. Requires UE 5.9 with the engine plugins
 **GeometryScripting**, **ToolsetRegistry**, **PythonScriptPlugin** and **EditorScriptingUtilities**
 (all enabled automatically as dependencies). Works alongside [VibeUE](https://github.com/kevinpbuckley/VibeUE)
 but does not depend on it.

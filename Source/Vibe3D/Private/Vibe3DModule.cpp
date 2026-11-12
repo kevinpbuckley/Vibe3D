@@ -54,7 +54,7 @@ namespace
 
 /**
  * Vibe3D: procedural modeling as an AI Editor Toolset. The module's only job is to hand the
- * AICallable service classes (UModelingService) to UE 5.8's ToolsetRegistry so they appear on the
+ * AICallable service classes (UModelingService) to UE 5.9's ToolsetRegistry so they appear on the
  * native MCP endpoint, and to expose a console command that re-reads the markdown skills.
  */
 class FVibe3DModule : public IModuleInterface

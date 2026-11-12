@@ -20,7 +20,7 @@ public class Vibe3D : ModuleRules
 				"Core",
 				"CoreUObject",
 				"Engine",
-				"ToolsetRegistry",          // UE 5.8 native AI toolset registry: UToolsetDefinition base + AICallable registration
+				"ToolsetRegistry",          // UE 5.9 native AI toolset registry: UToolsetDefinition base + AICallable registration
 			}
 		);
 
