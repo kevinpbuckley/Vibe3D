@@ -78,8 +78,9 @@ svc.spawn_static_mesh_actor("/Game/Props/SM_Crate", unreal.Transform(unreal.Vect
 svc.release_all_meshes()
 ```
 
-Then **look at it**, framed on the actor, using the available viewport capture tool (native Unreal
-MCP exposes `capture_image` with `source="editor"`). A successful call is not proof the shape is right.
+Then **look at it**, framed on the actor, with UE 5.9's native capture tool
+(`SceneCaptureToolset.SceneCaptureToolset.CaptureActiveEditorView`, or `CaptureEditorViewport` for a
+specific viewport; both return an MCP image block). A successful call is not proof the shape is right.
 
 A level made with `new_level()` has **no lighting**, so a black capture may be a lighting problem.
 For daylight, use a DirectionalLight pointing down (`Rotator(roll=0, pitch=-48, yaw=125)`),
@@ -89,8 +90,9 @@ exposure to the actual light intensities rather than treating one bias value as 
 
 For modeled lettering and logos, read [modeled-lettering.md](modeled-lettering.md).
 For lit promotional images, high-resolution capture, or distributable asset packs, read
-[showcase-and-delivery.md](showcase-and-delivery.md). These sibling documents are also registered
-as native Unreal agent sub-doc skills by Vibe3D.
+[showcase-and-delivery.md](showcase-and-delivery.md). These sibling pages are not separate skill
+entries: UE rewrites the links to absolute paths when it serves this skill, so read the file at the
+path given (see **Reference pages** at the end).
 
 ## Function map (Python names)
 
@@ -120,9 +122,10 @@ Mode tool plus the asset plumbing. What it deliberately does not wrap, and how t
 | `MeshWeightMap`, `MeshSculptLayers`, `MeshGeodesic`, `TextureMap`, `VolumeTextureBake`, `EditorTextureMap` | Niche; would double the API for rare use | `mesh = svc.get_dynamic_mesh(handle)` then e.g. `unreal.GeometryScript_MeshGeodesics.create_surface_path(mesh, ...)` |
 | Per-function option structs (remesh smoothing type, bake bit depth, XAtlas iterations, ...) | The wrappers fix sensible defaults | Same trick — the handle's `UDynamicMesh` is the live object; GeometryScript calls edit it in place and the next `svc.*` call sees the result |
 
-Discover any of them with `discover_python_class('unreal.GeometryScript_<Library>')`.
+Discover any of them with `search_symbols` (e.g. pattern `GeometryScript_`), then `get_symbol` with
+`name="unreal.GeometryScript_<Library>"`.
 
-Exact signatures: `discover_python_class('unreal.ModelingService')`. The long tail — anything not
+Exact signatures: `get_symbol` with `name="unreal.ModelingService"`. The long tail — anything not
 here — is reachable directly: the mesh behind a handle is `svc.get_dynamic_mesh(handle)`, which you
 can pass to any `unreal.GeometryScript_*` library function in the same script.
 
@@ -383,3 +386,9 @@ texel density. For anything an artist would paint, build the islands yourself an
 
 Crisp markings (roundels, numbers) are still best as decals: `set_num_uv_layers(h, 2)` +
 `project_uv(h, "Planar", transform, 1, sel)` gives a clamped UV1 the material samples a decal through.
+
+## Reference pages
+
+- [modeled-lettering.md](modeled-lettering.md) — extruded logo lettering from font contours
+- [showcase-and-delivery.md](showcase-and-delivery.md) — lighting, high-resolution capture, asset packs
+- [scripts/exercise_all.txt](scripts/exercise_all.txt) — calls every ModelingService function and prints `RESULT: PASS`

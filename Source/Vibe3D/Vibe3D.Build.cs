@@ -32,8 +32,7 @@ public class Vibe3D : ModuleRules
 				"EditorScriptingUtilities", // UEditorAssetLibrary
 				"AssetRegistry",
 				"AssetTools",               // texture import
-				"Projects",                 // IPluginManager (plugin content dir for skill reload)
-				"PythonScriptPlugin",       // Vibe3D.ReloadSkills re-runs Content/Python/init_unreal.py
+				"Projects",                 // IPluginManager (plugin dir for the agent-guide sample)
 				"GeometryCore",             // FDynamicMesh3 + attribute sets behind UDynamicMesh
 				"GeometryFramework",        // UDynamicMesh session meshes
 				"DynamicMesh",              // mesh operator types used by GeometryScript

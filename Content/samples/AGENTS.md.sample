@@ -10,12 +10,16 @@ into the engine's `AgentSkill` system — both reachable through the MCP tools y
 
 ## 1. How to work with it (read this first)
 
-- **Load the skill first**: `call_tool` → `AgentSkillToolset.GetSkills` with `modeling`. It holds the
-  session model, the frame semantics for sweeps and lofts, the texturing pipeline, the rigging
-  workflow and the gotchas that bit real builds. Do not guess at those from memory.
-- **Batch in `execute_python_code`.** Every function is a static on `unreal.ModelingService`
-  (`svc = unreal.ModelingService`), so a whole build — create, edit, unwrap, bake, save, verify —
-  is one round-trip. `print()` the evidence you need (`get_mesh_info`, `get_uv_stats`, `list_bones`).
+- **Load the skill first**: `call_tool` → `ToolsetRegistry.AgentSkillToolset.GetSkills` with
+  `skillPaths: ["/Skills/Vibe3D/modeling"]`. It holds the session model, the frame semantics for
+  sweeps and lofts, the texturing pipeline, the rigging workflow and the gotchas that bit real
+  builds. Do not guess at those from memory. Its sub-pages (modeled lettering, showcase and
+  delivery, `scripts/exercise_all.txt`) are linked under **Reference pages** as absolute paths:
+  read the file at the path given.
+- **Batch in `execute_python`** (call `read_me` once first). Every function is a static on
+  `unreal.ModelingService` (`svc = unreal.ModelingService`), so a whole build — create, edit, unwrap,
+  bake, save, verify — is one round-trip. Return the evidence you need (`get_mesh_info`,
+  `get_uv_stats`, `list_bones`) as the script's final expression; `print()` goes to the Output Log.
 - **Handles, not assets.** Meshes live in an in-editor session as integer handles wrapping a
   `UDynamicMesh`. Nothing is an asset until `save_mesh_to_static_mesh` / `save_mesh_to_skeletal_mesh`.
   Release handles when done (`release_mesh`, `release_all_meshes`).
@@ -42,8 +46,8 @@ svc.release_all_meshes()
 
 ## 2. Tool roster
 
-`list_toolsets` shows `Vibe3D.ModelingService`; `describe_toolset` lists every tool with its
-parameters. The areas, in the order a build usually runs:
+`list_toolsets` shows `Vibe3D.ModelingService`; `get_symbol` with `name="unreal.ModelingService"`
+gives the exact Python signatures (`describe_tools` gives the MCP schemas, but is token-heavy). The areas, in the order a build usually runs:
 
 | Area | Examples |
 |---|---|
@@ -74,4 +78,4 @@ parameters. The areas, in the order a build usually runs:
 - Big bakes (4K, 4 spp) take minutes: the MCP call may time out while the editor keeps working —
   log to a file and re-check rather than re-issuing the bake.
 - Tests: `Automation RunTests Vibe3D.Modeling` (editor must be in the foreground for the frame-rate
-  gate); `Content/Skills/modeling/scripts/exercise_all.txt` calls every function and prints `RESULT: PASS`.
+  gate); `Skills/modeling/scripts/exercise_all.txt` calls every function and prints `RESULT: PASS`.

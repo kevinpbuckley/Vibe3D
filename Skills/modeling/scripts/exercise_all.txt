@@ -3,7 +3,7 @@
 # exercise_all.txt — Call EVERY ModelingService function once and report PASS/FAIL, then prove
 # nothing was skipped by diffing against dir(unreal.ModelingService).
 #
-# Sample/verification script for the modeling skill. Run via execute_python_code. It only writes
+# Sample/verification script for the modeling skill. Run via execute_python. It only writes
 # under /Game/Developers/Vibe3DModelingExercise and removes everything it created at the end.
 # Skeletal-mesh calls use the first SkeletalMesh found in the project (skipped when there is none).
 import unreal

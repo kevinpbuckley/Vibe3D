@@ -30,15 +30,15 @@ callable from editor Python as `unreal.ModelingService.<snake_case>(...)`.
 **Network Replicated:** No (editor-only tooling)
 
 **Documentation:** `README.md` in the plugin, plus an in-editor agent skill
-(`Content/Skills/modeling/SKILL.md`) registered with the engine's toolset registry at editor start
-and re-loadable with the `Vibe3D.ReloadSkills` console command. Agent-guide generator:
+(`Skills/modeling/SKILL.md`) discovered natively by the engine's toolset registry and served as
+`/Skills/Vibe3D/modeling`. Agent-guide generator:
 `Vibe3D.GenerateAgentConfig [ClaudeCode|Gemini|Codex|Hermes|Cursor|Copilot|All] [import]`.
 
 **Important / Additional Notes**
 
 - Editor-only. The module is `Type: Editor`; nothing is exposed in a packaged game.
 - No third-party libraries, no external services, no network calls, no telemetry. The plugin ships no binaries.
-- Content is non-asset only (the agent skill, a Python bootstrap and a sample guide) — there are no
+- Content is non-asset only (the markdown agent skill and a sample guide) — there are no
   `.uasset` or `.umap` files, so nothing to cook.
 
 **Prerequisites:** Unreal Engine 5.9 with the C++ toolchain installed (the plugin is a code plugin).

@@ -17,7 +17,7 @@ Status of the plugin against Epic's Fab requirements for a **code plugin**. Mirr
 - [x] Each project file link hosts exactly one plugin folder with the proper structure
       (`MakePlugin.ps1` enforces the layout and fails if anything required is missing)
 - [x] Documentation is linked and in-editor — `README.md`, plus the `modeling` agent skill
-      registered at editor start (`Content/Skills/modeling/SKILL.md`)
+      discovered natively by UE 5.9 (`Skills/modeling/SKILL.md`, listed in `FilterPlugin.ini`)
 - [x] No Megascans or other re-distributed third-party content
 
 ## Code plugin
@@ -38,7 +38,7 @@ Status of the plugin against Epic's Fab requirements for a **code plugin**. Mirr
 ### Copyright & source code
 - [x] All source/header files carry `// Copyright Buckley Builds LLC 2026 All Rights Reserved.`
 - [x] Shipped Content files carry the same notice (in `SKILL.md` it sits **after** the YAML
-      frontmatter — a header above it breaks skill registration in `init_unreal.py`)
+      frontmatter — a header above it breaks the engine's frontmatter parse)
 - [x] `LICENSE` retained in the repo and excluded from the submission ZIP, matching VibeUE's packaging convention.
 
 ### File structure
@@ -56,8 +56,7 @@ Status of the plugin against Epic's Fab requirements for a **code plugin**. Mirr
       patch releases; a new engine-header deprecation under `/WX` becomes a rejected submission
       (VibeUE issue #569 was exactly this)
 - [x] No C++ third-party code or libraries — Third Party Software form is N/A
-- [x] Shipped Python (`Content/Python/init_unreal.py`) imports only engine modules
-      (`unreal`, `toolset_registry`) — no third-party packages
+- [x] No shipped Python — the agent skill is plain markdown discovered by the engine
 - [x] No binaries committed; Epic builds from source
 - [x] `RunUAT BuildPlugin` clean on **Win64** (2026-08-30): BUILD SUCCESSFUL, zero warnings, zero errors;
       FilterPlugin.ini honoured (README.md + test_prompts shipped, Icon128.png included)

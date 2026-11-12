@@ -1,11 +1,11 @@
 # Mesh Modeling Test Prompts
 
 Sequential prompts that exercise every `ModelingService` function through an agent. Each section
-names the functions it covers; the agent should call them via `execute_python_code`
-(`unreal.ModelingService`) after loading the `modeling` skill. Assets are created under
+names the functions it covers; the agent should call them via `execute_python`
+(`unreal.ModelingService`) after loading the `/Skills/Vibe3D/modeling` skill. Assets are created under
 `/Game/Developers/Vibe3DModelingTests` and removed in the last section.
 
-For a no-agent check of the same surface, run `Content/Skills/modeling/scripts/exercise_all.txt`
+For a no-agent check of the same surface, run `Skills/modeling/scripts/exercise_all.txt`
 (calls every function and prints `RESULT: PASS`), or the automation tests `Vibe3D.Modeling.*`
 (console: `Automation RunTests Vibe3D.Modeling`).
 

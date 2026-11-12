@@ -22,12 +22,13 @@ but does not depend on it.
 
 ## What you get
 
-- **Toolset `Vibe3D.ModelingService`** on the MCP endpoint (`list_toolsets` / `describe_toolset`) —
+- **Toolset `Vibe3D.ModelingService`** on the MCP endpoint (`list_toolsets` / `describe_tools`) —
   ~120 tools. Same functions from Python: `unreal.ModelingService.<snake_case>(...)`.
-- **Skill `modeling`** (`Content/Skills/modeling/SKILL.md`): the session model, frame semantics for
-  sweeps and lofts, the texturing pipeline (islands → unwrap → pack → verify → masks → pixels →
-  detail normals), rigging control surfaces, gotchas. Registered at editor start; re-read with the
-  console command `Vibe3D.ReloadSkills`.
+- **Skill `/Skills/Vibe3D/modeling`** (`Skills/modeling/SKILL.md`): the session model, frame semantics
+  for sweeps and lofts, the texturing pipeline (islands → unwrap → pack → verify → masks → pixels →
+  detail normals), rigging control surfaces, gotchas. UE 5.9 discovers `<Plugin>/Skills/**/SKILL.md`
+  natively and re-reads it on every `GetSkills` call, so edits need no reload or restart. Its sub-pages
+  are linked from the skill's **Reference pages** section.
 - `get_dynamic_mesh(handle)` hands the mesh to any `unreal.GeometryScript_*` library for the long tail.
 - **Agent guide**: console command `Vibe3D.GenerateAgentConfig [ClaudeCode|Gemini|Codex|Hermes|Cursor|Copilot|All] [import]`
   writes `Content/samples/AGENTS.md.sample` into your project's `CLAUDE.md` / `GEMINI.md` / `AGENTS.md`
@@ -54,7 +55,7 @@ svc.generate_collision("/Game/Props/SM_Crate", "ConvexHulls", 4)
 - Automation: `Automation RunTests Vibe3D.Modeling` (12 suites, self-provisioning; they write only under
   `/Game/Developers/Vibe3DModelingTests` and delete it). The editor must be in the foreground — the
   automation framework waits for an interactive frame rate.
-- Coverage: run `Content/Skills/modeling/scripts/exercise_all.txt` as editor Python — it calls every
+- Coverage: run `Skills/modeling/scripts/exercise_all.txt` as editor Python — it calls every
   public function and ends with `RESULT: PASS`.
 - Agent prompts: `test_prompts/modeling/modeling_tests.md`.
 
@@ -65,8 +66,8 @@ Vibe3D.uplugin
 Source/Vibe3D/            module (registers UToolsetDefinition subclasses with the ToolsetRegistry)
   Public/Vibe3D/UModelingService.h
   Private/Vibe3D/UModelingService.cpp, ModelingServiceTests.cpp
-Content/Skills/modeling/  SKILL.md + scripts/exercise_all.txt
-Content/Python/init_unreal.py   registers the skills as native AgentSkills
+Skills/modeling/          SKILL.md + sub-pages + scripts/exercise_all.txt (UE 5.9 native skill discovery)
+Content/samples/          AGENTS.md.sample (the agent guide Vibe3D.GenerateAgentConfig writes)
 test_prompts/modeling/    sequential agent prompts covering every function
 ```
 

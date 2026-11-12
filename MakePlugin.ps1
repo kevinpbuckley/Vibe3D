@@ -112,7 +112,7 @@ Write-Host "  copied $copied files" -ForegroundColor DarkGray
 
 # Required product files; listing collateral and the repository license are excluded above.
 $required = @('Vibe3D.uplugin', 'README.md', 'Source', 'Content', 'Config', 'Resources',
-              'Resources\Icon128.png', 'Config\FilterPlugin.ini')
+              'Resources\Icon128.png', 'Config\FilterPlugin.ini', 'Skills\modeling\SKILL.md')
 $missing = @()
 foreach ($item in $required) { if (-not (Test-Path (Join-Path $dest $item))) { $missing += $item } }
 if ($missing.Count -gt 0) {
