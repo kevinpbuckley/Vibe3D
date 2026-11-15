@@ -141,4 +141,6 @@ Selections are a different struct again (`unreal.GeometryScriptMeshSelection`); 
 - **Skeletal meshes: read SOURCE_MODEL when you will write back.** `GeometryScriptMeshReadLOD.lod_type` defaults to
   `MAX_AVAILABLE`, and render data splits vertices along UV and normal seams, so its vertex count differs from the
   source model a writer expects (a jam script failed with `dm verts 10364 != weight verts 10350`).
+  `svc.load_mesh_from_skeletal_mesh(path, lod)` reads the source model and `svc.save_mesh_to_skeletal_mesh_lod(h)`
+  validates and writes the LOD back in place, so a skeletal round trip needs no raw `copy_mesh_to_skeletal_mesh`.
 - Every library function takes the `UDynamicMesh` first and edits it in place; the returned mesh is the same object.

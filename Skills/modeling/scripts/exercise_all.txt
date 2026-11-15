@@ -209,6 +209,13 @@ sk_path = ROOT + "/SK_ExerciseRig"
 call("save_mesh_to_skeletal_mesh", rg, sk_path, "", True, False)
 assert unreal.EditorAssetLibrary.does_asset_exist(sk_path + "_Skeleton"), "skeleton should be created next to the mesh"
 call("set_asset_materials", sk_path, "/Engine/BasicShapes/BasicShapeMaterial", False)
+# skeletal LOD round trip: append a LOD, edit it in place, check the asset
+low = call("copy_mesh", rg).handle
+call("save_mesh_to_skeletal_mesh_lod", low, sk_path, 1, False)                  # LOD index == LOD count appends
+lod = call("load_mesh_from_skeletal_mesh", sk_path, 1).handle
+call("translate_mesh", lod, unreal.Vector(0, 0, 2))
+assert "original vertex order" in call("save_mesh_to_skeletal_mesh_lod", lod, "", -1, False).message   # "" / -1 = where it came from
+assert "LOD 1:" in call("inspect_skeletal_mesh", sk_path).message
 
 # --- UV control: polygroup islands, conformal unwrap, packing, verification
 uv = call("create_mesh").handle

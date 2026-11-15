@@ -18,6 +18,9 @@
 #include "UDynamicMesh.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/SkeletalMesh.h"
+#include "GeometryScript/MeshAssetFunctions.h"
+#include "GeometryScript/MeshBoneWeightFunctions.h"
 
 // Self-provisioning: every test builds its own geometry through the service, writes only under
 // kModelingTestDir, and releases / deletes what it made. No project content is required.
@@ -808,6 +811,124 @@ bool FVibe3DModelingIntakeTest::RunTest(const FString&)
 	FAssetCompilingManager::Get().FinishAllCompilation();
 	UModelingService::ReleaseAllMeshes();
 	IFileManager::Get().Delete(*File);
+	TestTrue(TEXT("test folder removed"), UEditorAssetLibrary::DeleteDirectory(kModelingTestDir));
+	return true;
+}
+
+namespace
+{
+	TArray<UMaterialInterface*> LODMaterials(USkeletalMesh* SkeletalMesh, int32 LODIndex)
+	{
+		TArray<UMaterialInterface*> Materials;
+		TArray<int32> Indices;
+		TArray<FName> Names;
+		FGeometryScriptMeshReadLOD ReadLOD;
+		ReadLOD.LODIndex = LODIndex;
+		EGeometryScriptOutcomePins Outcome;
+		UGeometryScriptLibrary_StaticMeshFunctions::GetLODMaterialListFromSkeletalMesh(SkeletalMesh, ReadLOD, Materials, Indices, Names, Outcome);
+		return Materials;
+	}
+
+	/** A two-bone, two-material skeletal mesh asset: a subdivided body box (root, material 0) and a flap box (flap, material 1). */
+	int32 MakeRiggedTwoMaterialMesh()
+	{
+		const int32 H = UModelingService::CreateMesh().Handle;
+		UModelingService::AppendBox(H, FTransform::Identity, 100.f, 100.f, 100.f, 4, 4, 4);
+		UModelingService::AppendBox(H, FTransform(FVector(0, 200, 0)), 50.f, 50.f, 50.f, 2, 2, 2, TEXT("Base"), 1);
+		UModelingService::SelectConnected(H, TEXT("flap"), FVector(0, 200, 25));
+		FModelingBoneDef Root;
+		Root.Name = TEXT("root");
+		FModelingBoneDef Flap;
+		Flap.Name = TEXT("flap");
+		Flap.ParentName = TEXT("root");
+		Flap.Transform = FTransform(FVector(0, 175, 0));
+		UModelingService::CreateBones(H, { Root, Flap });
+		UModelingService::BindSelectionToBone(H, TEXT("flap"), TEXT("flap"), 1.f);
+		return H;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVibe3DModelingSkeletalLODTest, "Vibe3D.Modeling.SkeletalLODRoundTrip", kModelingTestFlags)
+bool FVibe3DModelingSkeletalLODTest::RunTest(const FString&)
+{
+	FScopedModelingSession Session;
+	if (UEditorAssetLibrary::DoesDirectoryExist(kModelingTestDir)) { UEditorAssetLibrary::DeleteDirectory(kModelingTestDir); }
+	const FString MeshPath = FString(kModelingTestDir) / TEXT("SK_LODRoundTrip");
+
+	const int32 H = MakeRiggedTwoMaterialMesh();
+	TestTrue(TEXT("asset saved"), UModelingService::SaveMeshToSkeletalMesh(H, MeshPath, TEXT(""), true, false).bSuccess);
+	TestTrue(TEXT("two slots assigned"), UModelingService::SetAssetMaterials(MeshPath,
+		TEXT("/Engine/BasicShapes/BasicShapeMaterial,/Engine/EngineMaterials/WorldGridMaterial"), false).bSuccess);
+	USkeletalMesh* SkeletalMesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
+	if (!TestNotNull(TEXT("skeletal mesh"), SkeletalMesh)) { return false; }
+	USkeleton* Skeleton = SkeletalMesh->GetSkeleton();
+
+	// Append LOD1 from a simplified copy.
+	const int32 Low = UModelingService::CopyMesh(H).Handle;
+	UModelingService::SimplifyToTriangleCount(Low, UModelingService::GetMeshInfo(H).TriangleCount / 2);
+	const FModelingResult Added = UModelingService::SaveMeshToSkeletalMeshLOD(Low, MeshPath, 1, false);
+	TestTrue(FString::Printf(TEXT("LOD1 appended: %s"), *Added.Message), Added.bSuccess);
+	TestEqual(TEXT("two LODs"), SkeletalMesh->GetLODNum(), 2);
+	const FModelingResult Inspected = UModelingService::InspectSkeletalMesh(MeshPath);
+	TestTrue(FString::Printf(TEXT("inspect lists both LODs: %s"), *Inspected.Message), Inspected.bSuccess && Inspected.Message.Contains(TEXT("LOD 1:")));
+	AddInfo(Inspected.Message);
+	const TArray<UMaterialInterface*> LOD0Before = LODMaterials(SkeletalMesh, 0);
+	const TArray<UMaterialInterface*> LOD1Before = LODMaterials(SkeletalMesh, 1);
+	const int32 LOD0Verts = UModelingService::LoadMeshFromSkeletalMesh(MeshPath, 0).VertexCount;
+
+	// Round trip LOD1 in place: load, move up 10 cm, save with no path.
+	const FModelingResult Loaded = UModelingService::LoadMeshFromSkeletalMesh(MeshPath, 1);
+	TestTrue(FString::Printf(TEXT("load LOD1: %s"), *Loaded.Message), Loaded.bSuccess && Loaded.Message.Contains(TEXT("source model")));
+	UModelingService::TranslateMesh(Loaded.Handle, FVector(0, 0, 10));
+	const FModelingResult Saved = UModelingService::SaveMeshToSkeletalMeshLOD(Loaded.Handle);
+	TestTrue(FString::Printf(TEXT("LOD1 written back: %s"), *Saved.Message), Saved.bSuccess);
+	TestTrue(TEXT("unchanged topology keeps the vertex order"), Saved.Message.Contains(TEXT("original vertex order")));
+	AddInfo(Saved.Message);
+	TestEqual(TEXT("still two LODs"), SkeletalMesh->GetLODNum(), 2);
+	TestTrue(TEXT("same skeleton"), SkeletalMesh->GetSkeleton() == Skeleton);
+	TestEqual(TEXT("still two bones"), SkeletalMesh->GetRefSkeleton().GetRawBoneNum(), 2);
+	TestEqual(TEXT("still two slots"), SkeletalMesh->GetMaterials().Num(), 2);
+	TestTrue(TEXT("LOD1 sections keep their materials"), LODMaterials(SkeletalMesh, 1) == LOD1Before);
+	const FModelingResult LOD1After = UModelingService::LoadMeshFromSkeletalMesh(MeshPath, 1);
+	TestTrue(TEXT("LOD1 moved up"), FMath::IsNearlyEqual(UModelingService::GetMeshInfo(LOD1After.Handle).BoundsMin.Z, 10.0, 0.01));
+	TestEqual(TEXT("LOD1 vertex count kept"), LOD1After.VertexCount, Loaded.VertexCount);
+	const FModelingResult LOD0After = UModelingService::LoadMeshFromSkeletalMesh(MeshPath, 0);
+	TestTrue(TEXT("LOD0 untouched"), FMath::IsNearlyEqual(UModelingService::GetMeshInfo(LOD0After.Handle).BoundsMin.Z, 0.0, 0.01) && LOD0After.VertexCount == LOD0Verts);
+
+	// LOD0 round trip through the old entry point keeps the slots too.
+	UModelingService::TranslateMesh(LOD0After.Handle, FVector(5, 0, 0));
+	TestTrue(TEXT("LOD0 replaced via save_mesh_to_skeletal_mesh"), UModelingService::SaveMeshToSkeletalMesh(LOD0After.Handle, MeshPath, TEXT(""), true, false).bSuccess);
+	TestTrue(TEXT("LOD0 sections keep their materials"), LODMaterials(SkeletalMesh, 0) == LOD0Before);
+	TestEqual(TEXT("LOD1 survives a LOD0 write"), SkeletalMesh->GetLODNum(), 2);
+
+	// Refusals: nothing is written.
+	TestFalse(TEXT("no weights rejected"), UModelingService::SaveMeshToSkeletalMeshLOD(MakeBox(), MeshPath, 1, false).bSuccess);
+	const int32 Foreign = MakeBox();
+	FModelingBoneDef Root;
+	Root.Name = TEXT("root");
+	FModelingBoneDef Bogus;
+	Bogus.Name = TEXT("bogus");
+	Bogus.ParentName = TEXT("root");
+	UModelingService::CreateBones(Foreign, { Root, Bogus });
+	UModelingService::BindSelectionToBone(Foreign, TEXT(""), TEXT("bogus"), 1.f);
+	const FModelingResult ForeignResult = UModelingService::SaveMeshToSkeletalMeshLOD(Foreign, MeshPath, 1, false);
+	TestTrue(FString::Printf(TEXT("foreign bone rejected: %s"), *ForeignResult.Message), !ForeignResult.bSuccess && ForeignResult.Message.Contains(TEXT("bogus")));
+	const int32 BadSlot = UModelingService::LoadMeshFromSkeletalMesh(MeshPath, 1).Handle;
+	UModelingService::SetMaterialID(BadSlot, TEXT(""), 7);
+	const FModelingResult SlotResult = UModelingService::SaveMeshToSkeletalMeshLOD(BadSlot);
+	TestTrue(FString::Printf(TEXT("material without a slot rejected: %s"), *SlotResult.Message), !SlotResult.bSuccess && SlotResult.Message.Contains(TEXT("Material ID 7")));
+	const int32 Unweighted = UModelingService::LoadMeshFromSkeletalMesh(MeshPath, 1).Handle;
+	bool bValidVertex = false;
+	UGeometryScriptLibrary_MeshBoneWeightFunctions::SetVertexBoneWeights(UModelingService::GetDynamicMesh(Unweighted), 0, {}, bValidVertex);
+	const FModelingResult UnweightedResult = UModelingService::SaveMeshToSkeletalMeshLOD(Unweighted);
+	TestTrue(FString::Printf(TEXT("unweighted vertex rejected: %s"), *UnweightedResult.Message), !UnweightedResult.bSuccess && UnweightedResult.Message.Contains(TEXT("no bone weight")));
+	TestFalse(TEXT("LOD beyond the end rejected"), UModelingService::SaveMeshToSkeletalMeshLOD(BadSlot, MeshPath, 5, false).bSuccess);
+	TestFalse(TEXT("missing LOD read rejected"), UModelingService::LoadMeshFromSkeletalMesh(MeshPath, 9).bSuccess);
+	TestFalse(TEXT("unknown origin needs a path"), UModelingService::SaveMeshToSkeletalMeshLOD(MakeBox()).bSuccess);
+	TestEqual(TEXT("refusals left two LODs"), SkeletalMesh->GetLODNum(), 2);
+
+	FAssetCompilingManager::Get().FinishAllCompilation();
+	UModelingService::ReleaseAllMeshes();
 	TestTrue(TEXT("test folder removed"), UEditorAssetLibrary::DeleteDirectory(kModelingTestDir));
 	return true;
 }

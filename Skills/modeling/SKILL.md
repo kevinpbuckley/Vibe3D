@@ -114,7 +114,8 @@ path given (see **Reference pages** at the end).
 | UVs / normals / groups / materials / colors | `auto_uv(handle, "XAtlas|PatchBuilder", uv_layer)`, `project_uv(handle, "Planar|Box|Cylinder", transform, uv_layer, sel)`, `repack_uv(handle, uv_layer, resolution)`, `set_num_uv_layers`, `recompute_normals(handle, hard_angle_deg)`, `flip_normals`, `ensure_outward(handle)` (flip if the enclosed volume is negative), `compute_polygroups(handle, "Angle|UVIslands|Components|Polygons", crease_angle)`, `set_material_id(handle, sel, id)`, `remap_material_id(handle, from, to)`, `set_vertex_color(handle, sel, color)`, `set_polygroup(handle, sel, group_id=-1)`, `recompute_uvs(handle, uv_layer, "Polygroups|UVIslands", "SpectralConformal|Conformal|ExpMap", sel)`, `transform_uv(handle, uv_layer, sel, translation, scale, rotation_deg, origin)`, `layout_uv(handle, uv_layer, "Repack|Stack|Normalize|Transform", sel, resolution)`, `pack_uv_per_material(handle, uv_layer, resolution)`, `get_uv_stats(handle, uv_layer)` → islands/coverage/overlap/texel density, `world_to_uv(handle, point, uv_layer)` |
 | Transform | `transform_mesh(handle, transform)`, `translate_mesh`, `rotate_mesh`, `scale_mesh`, `recenter_mesh(handle, "Bounds|Base")` |
 | Generated-prop intake | `intake_generated_mesh(file, asset_path, target_size_cm, fit_axis="Height", yaw_deg=0, pivot="BottomCenter", max_triangles=20000, max_texture_size=1024, collision="ConvexHulls", max_convex_hulls=4, lod_percents="", target_box_cm=Vector(), enable_nanite=False, force=False)` → `ModelingIntakeReport` (import GLB/FBX/OBJ, merge, scale, pivot, decimate, cap textures, LODs, collision; see **Generated props**) |
-| Assets | `save_mesh_to_static_mesh(handle, path, replace_existing, enable_collision, enable_nanite)`, `save_mesh_to_skeletal_mesh(handle, path, skeleton_path="")` ("" creates `<path>_Skeleton` from the mesh bones), `set_asset_materials(asset_path, "/Game/M_A,/Game/M_B")`, `transfer_bone_weights(handle, source_skeletal_mesh_path)`, `smooth_bone_weights(handle, skeleton_path)`, `prune_bone_weights(handle, "bone,bone")`, `scale_bone_weights(handle, sel, "bone,bone", scale, receiver_bone="")` (regional weight repair; freed weight -> receiver or strongest other influence), `smooth_selection_bone_weights(handle, sel, iterations=3, alpha=0.5)` (feather weight seams), `inspect_bone_weights(handle, sel="")` (per-bone verts/avg/max, weight sums, max influences), `create_bones(handle, [ModelingBoneDef(name, parent_name, transform)])`, `bind_selection_to_bone(handle, sel, bone, weight=1)`, `list_bones(handle)` → per-bone vertex counts, `generate_collision(asset_path, "MinVolumeShapes|ConvexHulls|AlignedBoxes|OrientedBoxes|MinimalSpheres|Capsules|SweptHulls", max_hulls)`, `set_lods(asset_path, [percent_triangles...])`, `bake_textures(target_handle, source_handle, "TangentNormal,AmbientOcclusion,Curvature,ObjectNormal,Position,VertexColor,MaterialID,UVShell,Height", resolution, out_folder, base_name)`, `bake_texture_transfer(target, source, "T_A,T_B", resolution, out_folder, base_name)`, `create_noise_texture(asset_path, w, h, cells, octaves)`, `draw_on_texture(asset_path, "Line|Dots|Rect|Fill", uv_points, color, thickness_px, spacing_px)`; image import is Epic's `EditorToolset.TextureToolset.ImportFile` + `EditorToolset.ObjectToolset.SetProperties`, and placing an asset in the level is `EditorToolset.LevelToolset.AddToSceneFromAsset`; `load_mesh_from_actor` also reads skeletal / dynamic mesh actors |
+| Skeletal LODs in place | `load_mesh_from_skeletal_mesh(path, lod)` (source model; the handle remembers where it came from), `save_mesh_to_skeletal_mesh_lod(handle, asset_path="", lod_index=-1)` (write ONE LOD back, validated; keeps skeleton, slots and the other LODs; lod_index == LOD count appends), `inspect_skeletal_mesh(path)` (slots, per-LOD source / verts / tris / bones used) — see **Editing a skeletal mesh LOD in place** |
+| Assets | `save_mesh_to_static_mesh(handle, path, replace_existing, enable_collision, enable_nanite)`, `save_mesh_to_skeletal_mesh(handle, path, skeleton_path="")` ("" creates `<path>_Skeleton` from the mesh bones; on an existing asset it replaces LOD0 through the same validated writer), `set_asset_materials(asset_path, "/Game/M_A,/Game/M_B")`, `transfer_bone_weights(handle, source_skeletal_mesh_path)`, `smooth_bone_weights(handle, skeleton_path)`, `prune_bone_weights(handle, "bone,bone")`, `scale_bone_weights(handle, sel, "bone,bone", scale, receiver_bone="")` (regional weight repair; freed weight -> receiver or strongest other influence), `smooth_selection_bone_weights(handle, sel, iterations=3, alpha=0.5)` (feather weight seams), `inspect_bone_weights(handle, sel="")` (per-bone verts/avg/max, weight sums, max influences), `create_bones(handle, [ModelingBoneDef(name, parent_name, transform)])`, `bind_selection_to_bone(handle, sel, bone, weight=1)`, `list_bones(handle)` → per-bone vertex counts, `generate_collision(asset_path, "MinVolumeShapes|ConvexHulls|AlignedBoxes|OrientedBoxes|MinimalSpheres|Capsules|SweptHulls", max_hulls)`, `set_lods(asset_path, [percent_triangles...])`, `bake_textures(target_handle, source_handle, "TangentNormal,AmbientOcclusion,Curvature,ObjectNormal,Position,VertexColor,MaterialID,UVShell,Height", resolution, out_folder, base_name)`, `bake_texture_transfer(target, source, "T_A,T_B", resolution, out_folder, base_name)`, `create_noise_texture(asset_path, w, h, cells, octaves)`, `draw_on_texture(asset_path, "Line|Dots|Rect|Fill", uv_points, color, thickness_px, spacing_px)`; image import is Epic's `EditorToolset.TextureToolset.ImportFile` + `EditorToolset.ObjectToolset.SetProperties`, and placing an asset in the level is `EditorToolset.LevelToolset.AddToSceneFromAsset`; `load_mesh_from_actor` also reads skeletal / dynamic mesh actors |
 
 ## GeometryScript coverage
 
@@ -398,7 +399,7 @@ print(svc.selection_bounds(h, "collar"))                           # sanity: is 
 svc.scale_bone_weights(h, "collar", "head,neck_02", 0.25, "spine_05")  # keep 25%, rest -> spine_05
 svc.smooth_selection_bone_weights(h, "collar", 3, 0.5)             # feather the seam
 print(svc.inspect_bone_weights(h, "collar").message)               # per-bone verts/avg/max + sums
-svc.save_mesh_to_skeletal_mesh(h, "/Game/.../SK_Jacket", "<its skeleton path>")
+svc.save_mesh_to_skeletal_mesh_lod(h)                              # back into the LOD it came from (repeat per LOD)
 ```
 
 - `select_by_bone_weight` builds the region from the weights themselves — more reliable than a box
@@ -412,6 +413,37 @@ svc.save_mesh_to_skeletal_mesh(h, "/Game/.../SK_Jacket", "<its skeleton path>")
 - `inspect_bone_weights(h, sel="")` is the audit: influencing bones, per-bone average/max, weight
   sums (should be 1.0 ± quantization), max influences. Check it before saving, and verify the pose
   in the animation skill afterwards — bad weights are invisible in the ref pose.
+
+## Editing a skeletal mesh LOD in place (garments, accessories, bodies)
+
+Characters are skeletal: shirts, dresses, accessories and bodies all carry a skeleton, material slots, skin weights
+and several LODs. Do not rebuild the asset to change its geometry; round-trip the LOD you are fixing:
+
+```python
+print(svc.inspect_skeletal_mesh("/Game/Chars/SKM_Shirt").message)   # slots, LODs (source model or generated), verts, bones used
+for lod in range(3):
+    h = svc.load_mesh_from_skeletal_mesh("/Game/Chars/SKM_Shirt", lod).handle
+    # ... any edit: move vertices, smooth, repair weights, push out of the body ...
+    r = svc.save_mesh_to_skeletal_mesh_lod(h)      # back to the asset and LOD it came from
+    print(r.success, r.message)
+    svc.release_mesh(h)
+svc.save_mesh_to_skeletal_mesh_lod(h2, "/Game/Chars/SKM_Shirt", 3)   # lod_index == LOD count appends a LOD
+```
+
+- **Load reads the source model** (the editable vertex layout). Never mix in positions read through
+  `GeometryScriptMeshReadLOD` with the default `MAX_AVAILABLE`/render data: render data splits vertices along seams, so
+  its vertex count differs and a writer fails (`dm verts 10364 != weight verts 10350`). A LOD that was *generated by
+  reduction* has no source model; the load message says so, and writing it back turns it into a custom LOD.
+- **Save validates before it writes**, and writes nothing on failure: every vertex must carry skin weight (an
+  unweighted vertex collapses to the root at runtime), every bone on the mesh must exist in the asset's skeleton
+  (matched by name, so the order does not matter), bone and material indices must be in range, and a posed handle
+  must be `unpose_mesh`-ed first. Afterwards it reads the LOD back and compares the vertex count.
+- **What is kept:** skeleton and reference skeleton, every material slot and the LOD's material map, the other LODs,
+  the LOD's recompute-normals/tangents settings, which section uses which slot, and — when the topology is unchanged
+  since the load — the original vertex order (morph targets and anything else indexed by vertex). The LOD stops
+  being auto-generated from LOD0 (it is a custom LOD now).
+- A topology change (remesh, delete faces) is allowed; give new triangles a material ID the asset has a slot for and
+  re-weight new vertices (`transfer_bone_weights`, `skin_to_surface`).
 
 ## Texturing pipeline (UVs you control, masks you can make, pixels you can draw)
 
