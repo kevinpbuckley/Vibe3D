@@ -77,6 +77,10 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "UObject/ObjectRedirector.h"
 #include "ScopedTransaction.h"
+#include "EngineUtils.h"
+#include "Components/SkinnedMeshComponent.h"
+#include "DynamicMesh/DynamicMeshAABBTree3.h"
+#include "MeshQueries.h"
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "Rendering/SkeletalMeshLODRenderData.h"
 
@@ -594,6 +598,9 @@ FModelingResult UModelingService::CopyMesh(int32 Handle)
 	UDynamicMesh* Out = nullptr;
 	UGeometryScriptDebug* Debug = NewDebug();
 	UGeometryScriptLibrary_MeshDecompositionFunctions::CopyMeshToMesh(Source, Target, Out, Debug);
+	// A copy is the same mesh: it keeps where it was loaded from, and a posed copy stays posed (so it cannot be saved as a reference pose by mistake).
+	if (const FSkeletalOrigin* Origin = Session().Origins.Find(Handle)) { const FSkeletalOrigin Copy = *Origin; Session().Origins.Add(NewHandle, Copy); }
+	if (const FPoseBinding* Pose = Session().Poses.Find(Handle)) { const FPoseBinding Copy = *Pose; Session().Poses.Add(NewHandle, Copy); }
 	return Finish(NewHandle, Target, Debug, FString::Printf(TEXT("Copied handle %d"), Handle));
 }
 
@@ -3761,6 +3768,393 @@ FModelingResult UModelingService::RemapLODBones(const FString& AssetPath, const 
 	R.VertexCount = TotalMoved;
 	R.Message = FString::Printf(TEXT("%s against %s (%d LOD(s)): %d vertices re-weighted%s"), *AssetPath, *ReferenceSkeletalMeshPath, NumRefLODs, TotalMoved, *Lines);
 	return R;
+}
+
+// =========================================================================
+// Posed skinned components and mesh-vs-mesh fitting
+// =========================================================================
+
+namespace
+{
+	AActor* FindActorInWorlds(const FString& Label, bool bPreferPlayWorld, bool& bOutPlayWorld)
+	{
+		bOutPlayWorld = false;
+		if (bPreferPlayWorld && GEditor && GEditor->PlayWorld)
+		{
+			for (TActorIterator<AActor> It(GEditor->PlayWorld); It; ++It)
+			{
+				if (It->GetActorLabel().Equals(Label, ESearchCase::IgnoreCase) || It->GetName().Equals(Label, ESearchCase::IgnoreCase))
+				{
+					bOutPlayWorld = true;
+					return *It;
+				}
+			}
+		}
+		return FindActorByLabel(Label);
+	}
+
+	/** Blend of the per-bone skinning matrices for one vertex, normalized by its weight sum. */
+	FMatrix BlendSkinning(const FBoneWeights& Weights, const TArray<FMatrix>& BoneSkinning)
+	{
+		FMatrix Blend(ForceInitToZero);
+		float Sum = 0.f;
+		for (int32 k = 0; k < Weights.Num(); ++k)
+		{
+			const int32 Bone = Weights[k].GetBoneIndex();
+			const float W = Weights[k].GetWeight();
+			if (W <= 0.f || !BoneSkinning.IsValidIndex(Bone)) { continue; }
+			Blend += BoneSkinning[Bone] * W;
+			Sum += W;
+		}
+		return Sum > 0.f ? Blend * (1.f / Sum) : FMatrix::Identity;
+	}
+
+	/** Where one vertex stands relative to another surface: signed distance along the nearest face's normal. */
+	struct FClearance
+	{
+		int32 Vid = INDEX_NONE;
+		bool bJudged = false;      // within MaxDistance and projecting onto the other surface (not past its open edge)
+		double Signed = 0.0;       // > 0 outside (the side the other surface's normals face), < 0 inside
+		FVector3d Normal = FVector3d::ZeroVector;
+	};
+
+	void EvaluateClearance(const FDynamicMesh3& M, const TArray<int32>& Vids, const FDynamicMesh3& Other, const FDynamicMeshAABBTree3& Tree, double MaxDistance, TArray<FClearance>& Out)
+	{
+		IMeshSpatial::FQueryOptions Query;
+		Query.MaxDistance = MaxDistance;
+		Out.Reset(Vids.Num());
+		for (const int32 Vid : Vids)
+		{
+			FClearance C;
+			C.Vid = Vid;
+			if (M.IsVertex(Vid))
+			{
+				const FVector3d P = M.GetVertex(Vid);
+				double DistSq = 0.0;
+				const int32 Tid = Tree.FindNearestTriangle(P, DistSq, Query);
+				if (Other.IsTriangle(Tid))
+				{
+					const FDistPoint3Triangle3d Dist = TMeshQueries<FDynamicMesh3>::TriangleDistance(Other, Tid, P);
+					const FVector3d Delta = P - Dist.ClosestTrianglePoint;
+					const FVector3d N = Other.GetTriNormal(Tid);
+					const double Len = Delta.Length();
+					// The offset must run along the face normal (within ~60 degrees): a vertex past an open edge (a head above a
+					// collar) has its nearest point on that edge and a sideways offset, and is not covered by the surface.
+					C.bJudged = Len <= MaxDistance && (Len < 1e-4 || FMath::Abs(Delta.Dot(N)) >= 0.5 * Len);
+					C.Signed = Delta.Dot(N);
+					C.Normal = N;
+				}
+			}
+			Out.Add(C);
+		}
+	}
+
+	/** Shared body of PushInside / PushOutside. */
+	FModelingResult PushAgainst(int32 Handle, int32 OtherHandle, bool bInside, float Margin, const FString& SelectionName, float MaxDistance, int32 SmoothIterations)
+	{
+		UDynamicMesh* Mesh = FindMesh(Handle);
+		if (!Mesh) { return NoMesh(Handle); }
+		UDynamicMesh* OtherMesh = FindMesh(OtherHandle);
+		if (!OtherMesh) { return Fail(Handle, FString::Printf(TEXT("No session mesh with handle %d to fit against"), OtherHandle)); }
+		if (OtherMesh == Mesh) { return Fail(Handle, TEXT("A mesh cannot be fitted against itself")); }
+		TArray<int32> Vids;
+		FString Error;
+		if (!SelectionVertices(Handle, SelectionName, Mesh, Vids, Error)) { return Fail(Handle, Error); }
+		const TSet<int32> Allowed(Vids);
+		const double M = FMath::Max(0.f, Margin);
+		const int32 Rings = FMath::Clamp(SmoothIterations, 0, 20);
+
+		FDynamicMesh3 Other;
+		OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other = O; });
+		const FDynamicMeshAABBTree3 Tree(&Other, true);
+
+		int32 Pushed = 0, Feathered = 0, Remaining = 0;
+		double MaxPush = 0.0;
+		Mesh->EditMesh([&](FDynamicMesh3& Target)
+		{
+			// Push along the nearest face's normal; a moved vertex can land over a neighbouring face with another normal, so
+			// repeat on what is still wrong (a few passes settle it).
+			TArray<FClearance> Clearance;
+			TMap<int32, FVector3d> Displacement;
+			for (int32 Pass = 0; Pass < 6; ++Pass)
+			{
+				EvaluateClearance(Target, Vids, Other, Tree, MaxDistance, Clearance);
+				int32 Moved = 0;
+				for (const FClearance& C : Clearance)
+				{
+					if (!C.bJudged) { continue; }
+					const double Need = bInside ? C.Signed + M : M - C.Signed;   // how far it must travel to satisfy the rule
+					if (Need <= (Pass == 0 ? 1e-6 : 1e-4)) { continue; }
+					const FVector3d Step = (bInside ? -C.Normal : C.Normal) * Need;
+					Target.SetVertex(C.Vid, Target.GetVertex(C.Vid) + Step);
+					Displacement.FindOrAdd(C.Vid, FVector3d::ZeroVector) += Step;
+					++Moved;
+				}
+				if (Moved == 0) { break; }
+			}
+			for (const TPair<int32, FVector3d>& Pair : Displacement) { MaxPush = FMath::Max(MaxPush, Pair.Value.Length()); }
+			Pushed = Displacement.Num();
+
+			// Feather: the rings around the pushed vertices take a smoothed share of their move (pushed vertices keep theirs).
+			TSet<int32> Region;
+			TArray<int32> Frontier;
+			Displacement.GetKeys(Frontier);
+			for (int32 Ring = 0; Ring < Rings; ++Ring)
+			{
+				TArray<int32> Next;
+				for (const int32 Vid : Frontier)
+				{
+					for (const int32 Nbr : Target.VtxVerticesItr(Vid))
+					{
+						if (!Displacement.Contains(Nbr) && Allowed.Contains(Nbr) && !Region.Contains(Nbr)) { Region.Add(Nbr); Next.Add(Nbr); }
+					}
+				}
+				Frontier = MoveTemp(Next);
+			}
+			TMap<int32, FVector3d> Soft;
+			for (int32 Iter = 0; Iter < Rings; ++Iter)
+			{
+				TMap<int32, FVector3d> Step;
+				for (const int32 Vid : Region)
+				{
+					FVector3d Sum = FVector3d::ZeroVector;
+					int32 Count = 0;
+					for (const int32 Nbr : Target.VtxVerticesItr(Vid))
+					{
+						if (const FVector3d* Hard = Displacement.Find(Nbr)) { Sum += *Hard; }
+						else if (const FVector3d* Prev = Soft.Find(Nbr)) { Sum += *Prev; }
+						++Count;
+					}
+					if (Count > 0) { Step.Add(Vid, Sum / Count); }
+				}
+				Soft = MoveTemp(Step);
+			}
+			for (const TPair<int32, FVector3d>& Pair : Soft)
+			{
+				if (Pair.Value.SquaredLength() > 1e-12) { Target.SetVertex(Pair.Key, Target.GetVertex(Pair.Key) + Pair.Value); ++Feathered; }
+			}
+
+			// What is still wrong after the move (the nearest face can change under a vertex that moved).
+			EvaluateClearance(Target, Vids, Other, Tree, MaxDistance, Clearance);
+			for (const FClearance& C : Clearance)
+			{
+				if (C.bJudged && (bInside ? C.Signed + M : M - C.Signed) > 0.01) { ++Remaining; }
+			}
+		}, EDynamicMeshChangeType::DeformationEdit, EDynamicMeshAttributeChangeFlags::VertexPositions);
+
+		return Ok(Handle, Mesh, FString::Printf(TEXT("Pushed %d vertices %s handle %d (margin %.2f cm, largest move %.2f cm), feathered %d neighbour(s) over %d ring(s); %d still within the margin%s"),
+			Pushed, bInside ? TEXT("inside") : TEXT("outside"), OtherHandle, M, MaxPush, Feathered, Rings, Remaining,
+			Remaining > 0 ? TEXT(" (run again, or raise smooth_iterations)") : TEXT("")));
+	}
+}
+
+FModelingResult UModelingService::LoadMeshFromSkinnedComponent(const FString& ActorLabel, const FString& ComponentName, bool bWorldSpace, int32 LODIndex, bool bPreferPlayWorld)
+{
+	bool bPlayWorld = false;
+	AActor* Actor = FindActorInWorlds(ActorLabel, bPreferPlayWorld, bPlayWorld);
+	if (!Actor) { return Fail(-1, FString::Printf(TEXT("No actor labeled '%s' in the %s"), *ActorLabel, bPreferPlayWorld && GEditor && GEditor->PlayWorld ? TEXT("PIE or editor world") : TEXT("editor world"))); }
+	TArray<USkinnedMeshComponent*> Components;
+	Actor->GetComponents(Components);
+	TArray<FString> Names;
+	USkinnedMeshComponent* Component = nullptr;
+	for (USkinnedMeshComponent* Candidate : Components)
+	{
+		Names.Add(Candidate->GetName());
+		if (!Component && (ComponentName.IsEmpty() || Candidate->GetName().Equals(ComponentName, ESearchCase::IgnoreCase))) { Component = Candidate; }
+	}
+	if (!Component)
+	{
+		return Fail(-1, FString::Printf(TEXT("Actor '%s' has no skinned component%s (has: %s)"), *ActorLabel,
+			ComponentName.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" named '%s'"), *ComponentName), Names.Num() ? *FString::Join(Names, TEXT(", ")) : TEXT("none")));
+	}
+	USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Component->GetSkinnedAsset());
+	if (!SkeletalMesh) { return Fail(-1, FString::Printf(TEXT("Component '%s' has no SkeletalMesh assigned"), *Component->GetName())); }
+	const USkinnedMeshComponent* PoseSource = Component->LeaderPoseComponent.IsValid() ? Component->LeaderPoseComponent.Get() : Component;
+	if (PoseSource->GetNumComponentSpaceTransforms() == 0)
+	{
+		return Fail(-1, FString::Printf(TEXT("'%s' has no evaluated pose yet (component not registered, or its leader '%s' has not ticked): open the level / let PIE run a frame"),
+			*Component->GetName(), *PoseSource->GetName()));
+	}
+
+	const FModelingResult Loaded = LoadMeshFromSkeletalMesh(SkeletalMesh->GetPathName(), LODIndex);
+	if (!Loaded.bSuccess) { return Loaded; }
+	const int32 Handle = Loaded.Handle;
+	UDynamicMesh* Mesh = FindMesh(Handle);
+
+	// Runtime skinning: InvRefBase(bone) * ComponentSpace(bone), per bone of the mesh's weight indices.
+	const FTransform LocalToWorld = bWorldSpace ? Component->GetComponentTransform() : FTransform::Identity;
+	const FReferenceSkeleton& RefSkeleton = SkeletalMesh->GetRefSkeleton();
+	const TArray<FMatrix44f>& InvRef = SkeletalMesh->GetRefBasesInvMatrix();
+	FPoseBinding Binding;
+	int32 Unmatched = 0;
+	Mesh->ProcessMesh([&](const FDynamicMesh3& M)
+	{
+		const bool bHasBones = M.HasAttributes() && M.Attributes()->HasBones();
+		const int32 NumBones = bHasBones ? M.Attributes()->GetNumBones() : RefSkeleton.GetRawBoneNum();
+		Binding.BoneSkinning.SetNum(NumBones);
+		for (int32 i = 0; i < NumBones; ++i)
+		{
+			const FName Name = bHasBones ? M.Attributes()->GetBoneNames()->GetValue(i) : RefSkeleton.GetBoneName(i);
+			const int32 AssetBone = RefSkeleton.FindBoneIndex(Name);
+			const int32 ComponentBone = Component->GetBoneIndex(Name);
+			if (AssetBone == INDEX_NONE || ComponentBone == INDEX_NONE || !InvRef.IsValidIndex(AssetBone))
+			{
+				Binding.BoneSkinning[i] = LocalToWorld.ToMatrixWithScale();   // unknown bone: stays in the reference pose
+				++Unmatched;
+				continue;
+			}
+			Binding.BoneSkinning[i] = FMatrix(InvRef[AssetBone]) * Component->GetBoneTransform(ComponentBone, LocalToWorld).ToMatrixWithScale();
+		}
+	});
+	Mesh->EditMesh([&](FDynamicMesh3& M)
+	{
+		const FSkinWeights* Skin = DefaultSkinWeights(M);
+		FBoneWeights Weights;
+		for (const int32 Vid : M.VertexIndicesItr())
+		{
+			if (Skin) { Skin->GetValue(Vid, Weights); }
+			const FMatrix Blend = Skin ? BlendSkinning(Weights, Binding.BoneSkinning) : LocalToWorld.ToMatrixWithScale();
+			M.SetVertex(Vid, Blend.TransformPosition(M.GetVertex(Vid)));
+		}
+	}, EDynamicMeshChangeType::DeformationEdit, EDynamicMeshAttributeChangeFlags::VertexPositions);
+	Binding.Source = FString::Printf(TEXT("%s.%s LOD %d, %s world, %s space"), *ActorLabel, *Component->GetName(), LODIndex,
+		bPlayWorld ? TEXT("PIE") : TEXT("editor"), bWorldSpace ? TEXT("world") : TEXT("component"));
+	Session().Poses.Add(Handle, Binding);
+
+	FModelingResult R = Ok(Handle, Mesh, FString::Printf(TEXT("Loaded %s posed (%s%s), %d bone(s)%s; components on the actor: %s. Fit it, then unpose_mesh before save_mesh_to_skeletal_mesh_lod"),
+		*SkeletalMesh->GetPathName(), *Binding.Source, PoseSource != Component ? *FString::Printf(TEXT(", pose from leader '%s'"), *PoseSource->GetName()) : TEXT(""),
+		Binding.BoneSkinning.Num(), Unmatched ? *FString::Printf(TEXT(", %d not on the component (left in the reference pose)"), Unmatched) : TEXT(""), *FString::Join(Names, TEXT(", "))));
+	R.AssetPath = SkeletalMesh->GetPathName();
+	return R;
+}
+
+FModelingResult UModelingService::UnposeMesh(int32 Handle)
+{
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	if (!Mesh) { return NoMesh(Handle); }
+	const FPoseBinding* Binding = Session().Poses.Find(Handle);
+	if (!Binding) { return Fail(Handle, FString::Printf(TEXT("Handle %d is not posed (only load_mesh_from_skinned_component handles are)"), Handle)); }
+	int32 NumBones = 0;
+	Mesh->ProcessMesh([&NumBones](const FDynamicMesh3& M) { NumBones = (M.HasAttributes() && M.Attributes()->HasBones()) ? M.Attributes()->GetNumBones() : NumBones; });
+	if (NumBones != 0 && NumBones != Binding->BoneSkinning.Num())
+	{
+		return Fail(Handle, FString::Printf(TEXT("The handle's bones changed since the pose was read (%d -> %d): unpose before replacing bones"), Binding->BoneSkinning.Num(), NumBones));
+	}
+	int32 Singular = 0;
+	Mesh->EditMesh([&](FDynamicMesh3& M)
+	{
+		const FSkinWeights* Skin = DefaultSkinWeights(M);
+		FBoneWeights Weights;
+		for (const int32 Vid : M.VertexIndicesItr())
+		{
+			if (Skin) { Skin->GetValue(Vid, Weights); }
+			const FMatrix Blend = Skin ? BlendSkinning(Weights, Binding->BoneSkinning) : FMatrix::Identity;
+			if (FMath::Abs(Blend.Determinant()) < UE_SMALL_NUMBER) { ++Singular; continue; }
+			M.SetVertex(Vid, Blend.InverseFast().TransformPosition(M.GetVertex(Vid)));
+		}
+	}, EDynamicMeshChangeType::DeformationEdit, EDynamicMeshAttributeChangeFlags::VertexPositions);
+	const FString Source = Binding->Source;
+	Session().Poses.Remove(Handle);
+	return Ok(Handle, Mesh, FString::Printf(TEXT("Back in the reference pose (was %s)%s"), *Source,
+		Singular ? *FString::Printf(TEXT("; %d vertices with a degenerate blend left where they were"), Singular) : TEXT("")));
+}
+
+FModelingPenetrationReport UModelingService::MeasurePenetration(int32 Handle, int32 OtherHandle, const FString& Side, float Margin, float MaxDistance,
+	const FString& SelectionName, const FString& OutSelectionName)
+{
+	FModelingPenetrationReport Report;
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	UDynamicMesh* OtherMesh = FindMesh(OtherHandle);
+	if (!Mesh || !OtherMesh) { Report.Message = FString::Printf(TEXT("No session mesh with handle %d"), Mesh ? OtherHandle : Handle); return Report; }
+	if (Mesh == OtherMesh) { Report.Message = TEXT("A mesh cannot be measured against itself"); return Report; }
+	const bool bInside = Side.TrimStartAndEnd().Equals(TEXT("Inside"), ESearchCase::IgnoreCase);
+	if (!bInside && !Side.TrimStartAndEnd().Equals(TEXT("Outside"), ESearchCase::IgnoreCase))
+	{
+		Report.Message = FString::Printf(TEXT("Unknown side '%s' (use Inside: this mesh belongs under the other, or Outside: over it)"), *Side);
+		return Report;
+	}
+	TArray<int32> Vids;
+	FString Error;
+	if (!SelectionVertices(Handle, SelectionName, Mesh, Vids, Error)) { Report.Message = Error; return Report; }
+	FDynamicMesh3 Other;
+	OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other = O; });
+	const FDynamicMeshAABBTree3 Tree(&Other, true);
+	TArray<FClearance> Clearance;
+	TArray<int32> Offending;
+	double SumDepth = 0.0;
+	Mesh->ProcessMesh([&](const FDynamicMesh3& M)
+	{
+		EvaluateClearance(M, Vids, Other, Tree, MaxDistance, Clearance);
+		for (const FClearance& C : Clearance)
+		{
+			if (!C.bJudged) { continue; }
+			++Report.VerticesChecked;
+			const double Depth = bInside ? C.Signed + Margin : Margin - C.Signed;
+			if (Depth <= 1e-4) { continue; }
+			++Report.Violations;
+			Offending.Add(C.Vid);
+			SumDepth += Depth;
+			if (Depth > Report.MaxDepth)
+			{
+				Report.MaxDepth = static_cast<float>(Depth);
+				Report.WorstVertex = C.Vid;
+				Report.WorstPosition = M.GetVertex(C.Vid);
+			}
+		}
+	});
+	Report.AverageDepth = Report.Violations ? static_cast<float>(SumDepth / Report.Violations) : 0.f;
+	if (!OutSelectionName.IsEmpty())
+	{
+		FGeometryScriptMeshSelection Selection;
+		UGeometryScriptLibrary_MeshSelectionFunctions::ConvertIndexArrayToMeshSelection(Mesh, Offending, EGeometryScriptMeshSelectionType::Vertices, Selection);
+		StoreSelection(Handle, OutSelectionName, Selection);
+	}
+	Report.bSuccess = true;
+	Report.Message = FString::Printf(TEXT("%d of %d judged vertices of handle %d break '%s handle %d by %.2f cm' (max %.2f cm at %s, average %.2f cm); %d vertices not covered or farther than %.1f cm were skipped%s"),
+		Report.Violations, Report.VerticesChecked, Handle, bInside ? TEXT("inside") : TEXT("outside"), OtherHandle, Margin, Report.MaxDepth,
+		*Report.WorstPosition.ToCompactString(), Report.AverageDepth, Vids.Num() - Report.VerticesChecked, MaxDistance,
+		OutSelectionName.IsEmpty() ? TEXT("") : *FString::Printf(TEXT("; offenders stored as selection '%s'"), *OutSelectionName));
+	return Report;
+}
+
+FModelingResult UModelingService::PushInside(int32 Handle, int32 OtherHandle, float Margin, const FString& SelectionName, float MaxDistance, int32 SmoothIterations)
+{
+	return PushAgainst(Handle, OtherHandle, true, Margin, SelectionName, MaxDistance, SmoothIterations);
+}
+
+FModelingResult UModelingService::PushOutside(int32 Handle, int32 OtherHandle, float Margin, const FString& SelectionName, float MaxDistance, int32 SmoothIterations)
+{
+	return PushAgainst(Handle, OtherHandle, false, Margin, SelectionName, MaxDistance, SmoothIterations);
+}
+
+int32 UModelingService::SelectHiddenBy(int32 Handle, const FString& SelectionName, int32 OtherHandle, float Margin, float MaxDistance, bool bAllVertices)
+{
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	UDynamicMesh* OtherMesh = FindMesh(OtherHandle);
+	if (!Mesh || !OtherMesh || Mesh == OtherMesh || SelectionName.IsEmpty()) { return -1; }
+	FDynamicMesh3 Other;
+	OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other = O; });
+	const FDynamicMeshAABBTree3 Tree(&Other, true);
+	TArray<int32> Triangles;
+	Mesh->ProcessMesh([&](const FDynamicMesh3& M)
+	{
+		TArray<int32> Vids;
+		for (const int32 Vid : M.VertexIndicesItr()) { Vids.Add(Vid); }
+		TArray<FClearance> Clearance;
+		EvaluateClearance(M, Vids, Other, Tree, MaxDistance, Clearance);
+		TSet<int32> Hidden;
+		for (const FClearance& C : Clearance) { if (C.bJudged && C.Signed <= -Margin) { Hidden.Add(C.Vid); } }
+		for (const int32 Tid : M.TriangleIndicesItr())
+		{
+			const FIndex3i T = M.GetTriangle(Tid);
+			const int32 Count = (Hidden.Contains(T.A) ? 1 : 0) + (Hidden.Contains(T.B) ? 1 : 0) + (Hidden.Contains(T.C) ? 1 : 0);
+			if (bAllVertices ? Count == 3 : Count > 0) { Triangles.Add(Tid); }
+		}
+	});
+	FGeometryScriptMeshSelection Selection;
+	UGeometryScriptLibrary_MeshSelectionFunctions::ConvertIndexArrayToMeshSelection(Mesh, Triangles, EGeometryScriptMeshSelectionType::Triangles, Selection);
+	StoreSelection(Handle, SelectionName, Selection);
+	return Triangles.Num();
 }
 
 FModelingResult UModelingService::SetAssetMaterials(const FString& AssetPath, const FString& MaterialPaths, bool bSaveAsset)

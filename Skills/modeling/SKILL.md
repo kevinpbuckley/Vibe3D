@@ -114,6 +114,7 @@ path given (see **Reference pages** at the end).
 | UVs / normals / groups / materials / colors | `auto_uv(handle, "XAtlas|PatchBuilder", uv_layer)`, `project_uv(handle, "Planar|Box|Cylinder", transform, uv_layer, sel)`, `repack_uv(handle, uv_layer, resolution)`, `set_num_uv_layers`, `recompute_normals(handle, hard_angle_deg)`, `flip_normals`, `ensure_outward(handle)` (flip if the enclosed volume is negative), `compute_polygroups(handle, "Angle|UVIslands|Components|Polygons", crease_angle)`, `set_material_id(handle, sel, id)`, `remap_material_id(handle, from, to)`, `set_vertex_color(handle, sel, color)`, `set_polygroup(handle, sel, group_id=-1)`, `recompute_uvs(handle, uv_layer, "Polygroups|UVIslands", "SpectralConformal|Conformal|ExpMap", sel)`, `transform_uv(handle, uv_layer, sel, translation, scale, rotation_deg, origin)`, `layout_uv(handle, uv_layer, "Repack|Stack|Normalize|Transform", sel, resolution)`, `pack_uv_per_material(handle, uv_layer, resolution)`, `get_uv_stats(handle, uv_layer)` → islands/coverage/overlap/texel density, `world_to_uv(handle, point, uv_layer)` |
 | Transform | `transform_mesh(handle, transform)`, `translate_mesh`, `rotate_mesh`, `scale_mesh`, `recenter_mesh(handle, "Bounds|Base")` |
 | Generated-prop intake | `intake_generated_mesh(file, asset_path, target_size_cm, fit_axis="Height", yaw_deg=0, pivot="BottomCenter", max_triangles=20000, max_texture_size=1024, collision="ConvexHulls", max_convex_hulls=4, lod_percents="", target_box_cm=Vector(), enable_nanite=False, force=False)` → `ModelingIntakeReport` (import GLB/FBX/OBJ, merge, scale, pivot, decimate, cap textures, LODs, collision; see **Generated props**) |
+| Posed reads and garment fit | `load_mesh_from_skinned_component(actor_label, component_name="", world_space=False, lod=0, prefer_play_world=True)` (the component's CURRENT pose; PIE first), `unpose_mesh(handle)`, `measure_penetration(handle, other, "Inside|Outside", margin, max_distance=5, sel="", out_selection="")` → `ModelingPenetrationReport`, `push_inside(handle, other, margin, sel, max_distance, smooth_iterations)`, `push_outside(...)`, `select_hidden_by(handle, name, other, margin, max_distance, all_vertices=True)` — see **Fitting garments** |
 | Accessory re-skin | `skin_to_surface(handle, source_handle, mode="Surface|Inpaint|Rigid", rigid_bone_name="", bones_from_skeletal_mesh="", smooth_iterations=0, smooth_strength=0)` (weights from the skinned surface underneath), `remap_lod_bones(asset_path, reference_skeletal_mesh_path)` (move weight off bones the leader drops at lower LODs) — see **Accessories that follow a surface** |
 | Skeletal LODs in place | `load_mesh_from_skeletal_mesh(path, lod)` (source model; the handle remembers where it came from), `save_mesh_to_skeletal_mesh_lod(handle, asset_path="", lod_index=-1)` (write ONE LOD back, validated; keeps skeleton, slots and the other LODs; lod_index == LOD count appends), `inspect_skeletal_mesh(path)` (slots, per-LOD source / verts / tris / bones used) — see **Editing a skeletal mesh LOD in place** |
 | Assets | `save_mesh_to_static_mesh(handle, path, replace_existing, enable_collision, enable_nanite)`, `save_mesh_to_skeletal_mesh(handle, path, skeleton_path="")` ("" creates `<path>_Skeleton` from the mesh bones; on an existing asset it replaces LOD0 through the same validated writer), `set_asset_materials(asset_path, "/Game/M_A,/Game/M_B")`, `transfer_bone_weights(handle, source_skeletal_mesh_path)`, `smooth_bone_weights(handle, skeleton_path)`, `prune_bone_weights(handle, "bone,bone")`, `scale_bone_weights(handle, sel, "bone,bone", scale, receiver_bone="")` (regional weight repair; freed weight -> receiver or strongest other influence), `smooth_selection_bone_weights(handle, sel, iterations=3, alpha=0.5)` (feather weight seams), `inspect_bone_weights(handle, sel="")` (per-bone verts/avg/max, weight sums, max influences), `create_bones(handle, [ModelingBoneDef(name, parent_name, transform)])`, `bind_selection_to_bone(handle, sel, bone, weight=1)`, `list_bones(handle)` → per-bone vertex counts, `generate_collision(asset_path, "MinVolumeShapes|ConvexHulls|AlignedBoxes|OrientedBoxes|MinimalSpheres|Capsules|SweptHulls", max_hulls)`, `set_lods(asset_path, [percent_triangles...])`, `bake_textures(target_handle, source_handle, "TangentNormal,AmbientOcclusion,Curvature,ObjectNormal,Position,VertexColor,MaterialID,UVShell,Height", resolution, out_folder, base_name)`, `bake_texture_transfer(target, source, "T_A,T_B", resolution, out_folder, base_name)`, `create_noise_texture(asset_path, w, h, cells, octaves)`, `draw_on_texture(asset_path, "Line|Dots|Rect|Fill", uv_points, color, thickness_px, spacing_px)`; image import is Epic's `EditorToolset.TextureToolset.ImportFile` + `EditorToolset.ObjectToolset.SetProperties`, and placing an asset in the level is `EditorToolset.LevelToolset.AddToSceneFromAsset`; `load_mesh_from_actor` also reads skeletal / dynamic mesh actors |
@@ -286,6 +287,7 @@ The full loop for a generated prop:
 - `FModelingResult`: `success`, `message`, `handle`, `triangle_count`, `vertex_count`, `asset_path`.
 - `FModelingMeshInfo` (`get_mesh_info`): `handle`, `triangle_count`, `vertex_count`, `is_closed`, `open_border_edges`, `connected_components`, `bounds_min`, `bounds_max`, `surface_area`, `volume`, `num_uv_layers`, `has_vertex_colors`, `material_ids`.
 - `FModelingSplitResult` (`split_by_components`): `success`, `handles`.
+- `FModelingPenetrationReport` (`measure_penetration`): `success`, `message`, `vertices_checked`, `violations`, `max_depth`, `average_depth`, `worst_position`, `worst_vertex`.
 - `FModelingIntakeReport` (`intake_generated_mesh`): `success`, `message`, `asset_path`, `up_to_date`, `source_mesh_count`, `source_triangles`, `triangle_count`, `vertex_count`, `source_size`, `scale_applied`, `bounds_min`, `bounds_max`, `lod_count`, `collision_shapes`, `material_paths`, `textures`.
 
 ## Lofted solids (wings, fins, hulls)
@@ -445,6 +447,47 @@ svc.save_mesh_to_skeletal_mesh_lod(h2, "/Game/Chars/SKM_Shirt", 3)   # lod_index
   being auto-generated from LOD0 (it is a custom LOD now).
 - A topology change (remesh, delete faces) is allowed; give new triangles a material ID the asset has a slot for and
   re-weight new vertices (`transfer_bone_weights`, `skin_to_surface`).
+
+## Fitting garments: skin under cloth, cloth off skin, in the pose the game uses
+
+Poke-through depends on the pose: a fit that is clean in the reference pose can be 10+ cm wrong seated, and
+runtime post-process / corrective bones only exist on the running component. So read the meshes **as posed** —
+from PIE when it is running — fit them against each other, then take the result back to the reference pose and
+write it into the asset LOD:
+
+```python
+# the character is posed in PIE (or in the editor world); both handles in the same (component) space
+body  = svc.load_mesh_from_skinned_component("BP_Ava", "Body",  False).handle
+dress = svc.load_mesh_from_skinned_component("BP_Ava", "Dress", False).handle   # a leader-pose follower reads the leader's pose
+r = svc.measure_penetration(body, dress, "Inside", 0.3, 5.0, "", "poking")      # skin poking through the dress
+print(r.violations, r.max_depth, r.worst_position)
+svc.push_inside(body, dress, 0.3, "", 5.0, 2)          # skin moved under the dress, feathered over 2 rings
+svc.unpose_mesh(body)                                  # back to the reference pose (edits carried through the inverse skinning)
+svc.save_mesh_to_skeletal_mesh_lod(body)               # into the body asset LOD it came from
+```
+
+| Need | Call |
+|---|---|
+| How bad is it (per garment, per pose) | `measure_penetration(a, b, "Inside", margin)`: `a` belongs under `b` (skin under cloth, an inner layer under an outer one); `"Outside"`: `a` belongs over `b` (cloth over skin, a collar off the face). `violations`, `max_depth`, `average_depth`, `worst_position`; `out_selection` stores the offenders |
+| Push skin in under the cloth | `push_inside(body, garment, margin)` |
+| Push cloth out of the body or face | `push_outside(garment, body, margin)` |
+| Drop skin (or an inner garment) fully hidden under cloth | `select_hidden_by(body, "hidden", garment, margin)` then `delete_faces(body, "hidden")` |
+
+- **Only covered vertices are judged.** A vertex counts when it is within `max_distance` of the other surface AND
+  projects onto it (the offset runs along that face's normal). A head above a collar or hands past a sleeve are
+  never dragged into the cloth; raise `max_distance` only for loose garments. The other mesh's face normals define
+  "outside", so it needs consistent outward normals (any imported garment has them).
+- **Push rather than delete for dresses and open garments.** Deleting skin under a dress leaves holes where the
+  dress opens or moves (a see-through crotch, hollow legs). Push the skin in with a margin, and keep deletion for
+  regions that are covered in every pose.
+- **Fit in every pose the game uses.** One pose's fix can break another. Pose the character (PIE, each clip or
+  seated/standing state), read, measure, push, unpose, save — once per pose, worst first — and re-measure the
+  earlier poses at the end. (If VibeMetaHumans is installed, its wardrobe tools wrap this for MetaHuman bodies and
+  their post-process bones; this service is the generic mesh-vs-mesh layer underneath.)
+- **A posed handle cannot be saved as a reference pose** (`save_mesh_to_skeletal_mesh_lod` refuses it, and a
+  `copy_mesh` of it stays posed). `unpose_mesh` first. Normals are not re-skinned in the pose; only positions are.
+- The handle's vertex IDs are the asset LOD's source-model IDs, so selections, weights and the write-back all line
+  up; morph targets and cloth simulation are not applied to the posed read.
 
 ## Accessories that follow a surface (ties, dog tags, scarves, holsters)
 

@@ -223,6 +223,22 @@ call("skin_to_surface", plate, body, "Surface", "", "", 0, 0.0)
 assert [b.influenced_vertices for b in svc.list_bones(plate) if str(b.name) == "flap"] == [8]
 call("skin_to_surface", plate, body, "Rigid", "flap", "", 0, 0.0)
 assert "re-weighted" in call("remap_lod_bones", sk_path, sk_path, False).message   # against itself: nothing dropped, still a valid report
+# posed read of a placed skeletal mesh (reference pose in the editor world), then back
+ska = eas.spawn_actor_from_object(unreal.load_asset(sk_path), unreal.Vector(0, 0, -6000)); ska.set_actor_label("Vibe3DModelingExerciseSkel")
+ph = call("load_mesh_from_skinned_component", "Vibe3DModelingExerciseSkel", "", False, 0, True).handle
+call("unpose_mesh", ph)
+call("save_mesh_to_skeletal_mesh_lod", ph, "", -1, False)
+
+# --- garment fit: skin (r 50) poking through an open "shirt" (r 49, nothing above z 30)
+skin = call("create_mesh").handle; call("append_sphere", skin, T(), 50, 24, 32)
+shirt = call("create_mesh").handle; call("append_sphere", shirt, T(), 49, 24, 32); call("plane_cut", shirt, T(unreal.Vector(0, 0, 30)), False)
+assert call("measure_penetration", skin, shirt, "Inside", 0.3, 5.0, "", "poking").violations > 0
+call("push_inside", skin, shirt, 0.3, "", 5.0, 2)
+assert svc.measure_penetration(skin, shirt, "Inside", 0.3, 5.0, "", "").violations == 0
+sunk = call("create_mesh").handle; call("append_sphere", sunk, T(), 48, 24, 32)
+call("push_outside", sunk, skin, 0.3, "", 5.0, 2)
+inner = call("create_mesh").handle; call("append_sphere", inner, T(), 45, 24, 32)
+assert call("select_hidden_by", inner, "hidden", shirt, 0.5, 10.0, True) > 0
 
 # --- UV control: polygroup islands, conformal unwrap, packing, verification
 uv = call("create_mesh").handle
@@ -271,7 +287,7 @@ else:
 # --- cleanup
 eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 for actor in eas.get_all_level_actors():
-    if actor.get_actor_label() == "Vibe3DModelingExerciseActor":
+    if actor.get_actor_label() in ("Vibe3DModelingExerciseActor", "Vibe3DModelingExerciseSkel"):
         eas.destroy_actor(actor)
 svc.release_all_meshes()
 if unreal.EditorAssetLibrary.does_directory_exist(ROOT):

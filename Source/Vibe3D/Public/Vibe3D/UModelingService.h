@@ -268,6 +268,40 @@ struct FModelingBoneInfo
 	int32 InfluencedVertices = 0;
 };
 
+/** How far one mesh's vertices break a clearance rule against another (MeasurePenetration). */
+USTRUCT(BlueprintType)
+struct FModelingPenetrationReport
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	bool bSuccess = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	FString Message;
+
+	/** Vertices close enough to the other surface (within MaxDistance, projecting onto it) to be judged. */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 VerticesChecked = 0;
+
+	/** Judged vertices on the wrong side, or closer than the margin. */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 Violations = 0;
+
+	/** Worst violation in cm (how far that vertex must move to satisfy the rule, margin included). */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	float MaxDepth = 0.f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	float AverageDepth = 0.f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	FVector WorstPosition = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 WorstVertex = -1;
+};
+
 /** What IntakeGeneratedMesh did to a generated model: read it before placing the prop. */
 USTRUCT(BlueprintType)
 struct FModelingIntakeReport
@@ -387,6 +421,22 @@ public:
 	/** Load the static mesh of a level actor (by label) into a new session mesh; bWorldSpace bakes the actor transform in. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Load Mesh From Actor"))
 	static FModelingResult LoadMeshFromActor(const FString& ActorLabel, bool bWorldSpace = false, int32 LODIndex = 0);
+
+	/**
+	 * Read a skinned component (body, garment, accessory; leader-pose followers included) AS IT IS POSED right now, with
+	 * its asset's bones and weights: the source-model vertices of that LOD, skinned by the component's current bone
+	 * transforms. Looks in the running PIE world first when bPreferPlayWorld (the runtime pose, post-process and corrective
+	 * bones included), else the editor world. ComponentName "" takes the first skinned component (the message lists them
+	 * all). bWorldSpace false = component space. Vertex IDs match the asset LOD, and the handle keeps the pose, so after
+	 * fitting edits UnposeMesh brings the result back to the reference pose for SaveMeshToSkeletalMeshLOD.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Load Mesh From Skinned Component"))
+	static FModelingResult LoadMeshFromSkinnedComponent(const FString& ActorLabel, const FString& ComponentName = TEXT(""), bool bWorldSpace = false,
+		int32 LODIndex = 0, bool bPreferPlayWorld = true);
+
+	/** Undo the pose of a handle from LoadMeshFromSkinnedComponent: every vertex goes back through the inverse of its blended bone transform (with the handle's current weights), so edits made in the pose land in the reference pose. */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Unpose Mesh"))
+	static FModelingResult UnposeMesh(int32 Handle);
 
 	/** Duplicate a session mesh into a new handle. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Copy Mesh"))
@@ -842,6 +892,30 @@ public:
 	/** Hull swept along ProjectionFrame's Z axis (2D outline extruded through the mesh) as a NEW handle. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Swept Hull"))
 	static FModelingResult SweptHull(int32 Handle, FTransform ProjectionFrame);
+
+	// =====================================================================
+	// Fit one mesh against another (garments on bodies, layers of clothing). Both handles must be in the same space.
+	// A vertex is judged only when it lies within MaxDistance of the other surface AND projects onto it (the offset to the
+	// nearest point runs along that face's normal), so a head is never dragged into a collar. The other mesh's face
+	// normals say which side is "outside".
+	// =====================================================================
+
+	/** Report how far Handle's vertices break the rule "stay on Side of OtherHandle by Margin cm". Side "Inside" (skin under a garment) or "Outside" (a garment over skin). OutSelectionName (optional) stores the offending vertices. */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Measure Penetration"))
+	static FModelingPenetrationReport MeasurePenetration(int32 Handle, int32 OtherHandle, const FString& Side = TEXT("Inside"), float Margin = 0.f, float MaxDistance = 5.f,
+		const FString& SelectionName = TEXT(""), const FString& OutSelectionName = TEXT(""));
+
+	/** Move Handle's vertices that poke out through OtherHandle (or sit closer than Margin under it) inward along the other surface's normal until Margin under it — skin pushed under clothes. SmoothIterations feathers the move into that many rings of neighbours so no crease shows. */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Push Inside"))
+	static FModelingResult PushInside(int32 Handle, int32 OtherHandle, float Margin = 0.3f, const FString& SelectionName = TEXT(""), float MaxDistance = 5.f, int32 SmoothIterations = 2);
+
+	/** Move Handle's vertices that sink into OtherHandle (or sit closer than Margin above it) outward along the other surface's normal until Margin over it — a garment pushed off the body or off the face. */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Push Outside"))
+	static FModelingResult PushOutside(int32 Handle, int32 OtherHandle, float Margin = 0.3f, const FString& SelectionName = TEXT(""), float MaxDistance = 5.f, int32 SmoothIterations = 2);
+
+	/** Select Handle's triangles hidden under OtherHandle: every vertex (or any, with bAllVertices false) at least Margin inside it and covered by it. delete_faces on the result drops skin under clothes or an inner garment under an outer one. Returns the triangle count. */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Select Hidden By"))
+	static int32 SelectHiddenBy(int32 Handle, const FString& SelectionName, int32 OtherHandle, float Margin = 0.5f, float MaxDistance = 5.f, bool bAllVertices = true);
 
 	/** Surface distances between two meshes — verify a LOD / simplified copy against its source. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Measure Distance"))

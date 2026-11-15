@@ -19,6 +19,8 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/SkeletalMesh.h"
+#include "Components/PoseableMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "GeometryScript/MeshAssetFunctions.h"
 #include "GeometryScript/MeshBoneWeightFunctions.h"
 
@@ -1020,6 +1022,133 @@ bool FVibe3DModelingAccessoryReskinTest::RunTest(const FString&)
 	FAssetCompilingManager::Get().FinishAllCompilation();
 	UModelingService::ReleaseAllMeshes();
 	TestTrue(TEXT("test folder removed"), UEditorAssetLibrary::DeleteDirectory(kModelingTestDir));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVibe3DModelingPosedComponentTest, "Vibe3D.Modeling.PosedComponent", kModelingTestFlags)
+bool FVibe3DModelingPosedComponentTest::RunTest(const FString&)
+{
+	FScopedModelingSession Session;
+	if (UEditorAssetLibrary::DoesDirectoryExist(kModelingTestDir)) { UEditorAssetLibrary::DeleteDirectory(kModelingTestDir); }
+	const FString MeshPath = FString(kModelingTestDir) / TEXT("SK_PoseTest");
+	TestTrue(TEXT("asset saved"), UModelingService::SaveMeshToSkeletalMesh(MakeRiggedTwoMaterialMesh(), MeshPath, TEXT(""), true, false).bSuccess);
+	USkeletalMesh* SkeletalMesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!TestNotNull(TEXT("editor world"), World) || !SkeletalMesh) { return false; }
+
+	// A placed character stand-in: a poseable "body" with the flap bone raised 30 cm, and a leader-pose follower.
+	AActor* Actor = World->SpawnActor<AActor>(FVector(1000, 0, 0), FRotator::ZeroRotator);
+	UPoseableMeshComponent* Pose = NewObject<UPoseableMeshComponent>(Actor, TEXT("Pose"));
+	Actor->SetRootComponent(Pose);
+	Pose->SetSkinnedAssetAndUpdate(SkeletalMesh);
+	Pose->RegisterComponent();
+	USkeletalMeshComponent* Follower = NewObject<USkeletalMeshComponent>(Actor, TEXT("Follower"));
+	Follower->SetupAttachment(Pose);
+	Follower->SetSkinnedAssetAndUpdate(SkeletalMesh);
+	Follower->RegisterComponent();
+	Follower->SetLeaderPoseComponent(Pose);
+	Actor->SetActorLocation(FVector(1000, 0, 0));
+	Actor->SetActorLabel(TEXT("Vibe3DPoseTest"));
+	Pose->SetBoneLocationByName(TEXT("flap"), FVector(0, 175, 30), EBoneSpaces::ComponentSpace);
+	Pose->RefreshBoneTransforms();
+
+	const auto PieceMinZ = [](int32 Handle, const FVector& Point)
+	{
+		UModelingService::SelectConnected(Handle, TEXT("piece"), Point);
+		FVector Min, Max;
+		UModelingService::SelectionBounds(Handle, TEXT("piece"), Min, Max);
+		return Min.Z;
+	};
+
+	const FModelingResult Posed = UModelingService::LoadMeshFromSkinnedComponent(TEXT("Vibe3DPoseTest"), TEXT("Pose"), false, 0, true);
+	TestTrue(FString::Printf(TEXT("posed read: %s"), *Posed.Message), Posed.bSuccess);
+	AddInfo(Posed.Message);
+	TestTrue(TEXT("flap raised in the pose"), FMath::IsNearlyEqual(PieceMinZ(Posed.Handle, FVector(0, 200, 55)), 30.0, 0.05));
+	TestTrue(TEXT("body stays put"), FMath::IsNearlyEqual(PieceMinZ(Posed.Handle, FVector(0, 0, 50)), 0.0, 0.05));
+	const FModelingResult Refused = UModelingService::SaveMeshToSkeletalMeshLOD(Posed.Handle);
+	TestTrue(FString::Printf(TEXT("posed handle cannot be saved as a reference pose: %s"), *Refused.Message), !Refused.bSuccess && Refused.Message.Contains(TEXT("POSED")));
+	TestTrue(TEXT("a copy of a posed handle stays posed"), !UModelingService::SaveMeshToSkeletalMeshLOD(UModelingService::CopyMesh(Posed.Handle).Handle).bSuccess);
+
+	const FModelingResult InWorld = UModelingService::LoadMeshFromSkinnedComponent(TEXT("Vibe3DPoseTest"), TEXT("Pose"), true, 0, true);
+	TestTrue(TEXT("world space adds the actor transform"), FMath::IsNearlyEqual(UModelingService::GetMeshInfo(InWorld.Handle).BoundsMin.X, 950.0, 0.05));
+	const FModelingResult FromFollower = UModelingService::LoadMeshFromSkinnedComponent(TEXT("Vibe3DPoseTest"), TEXT("Follower"), false, 0, true);
+	TestTrue(FString::Printf(TEXT("follower read: %s"), *FromFollower.Message), FromFollower.bSuccess && FromFollower.Message.Contains(TEXT("leader")));
+	TestTrue(TEXT("follower takes the leader's pose"), FMath::IsNearlyEqual(PieceMinZ(FromFollower.Handle, FVector(0, 200, 55)), 30.0, 0.05));
+
+	// Edit in the pose, unpose, write: the edit lands in the reference pose.
+	UModelingService::SelectConnected(Posed.Handle, TEXT("flap"), FVector(0, 200, 55));
+	UModelingService::TranslateSelection(Posed.Handle, TEXT("flap"), FVector(0, 0, 5));
+	const FModelingResult Unposed = UModelingService::UnposeMesh(Posed.Handle);
+	TestTrue(FString::Printf(TEXT("unpose: %s"), *Unposed.Message), Unposed.bSuccess);
+	TestTrue(TEXT("flap back in the reference pose, keeping the 5 cm edit"), FMath::IsNearlyEqual(PieceMinZ(Posed.Handle, FVector(0, 200, 25)), 5.0, 0.05));
+	TestTrue(TEXT("body back where it was"), FMath::IsNearlyEqual(PieceMinZ(Posed.Handle, FVector(0, 0, 50)), 0.0, 0.05));
+	const FModelingResult Written = UModelingService::SaveMeshToSkeletalMeshLOD(Posed.Handle, TEXT(""), -1, false);
+	TestTrue(FString::Printf(TEXT("unposed handle writes back: %s"), *Written.Message), Written.bSuccess);
+	TestTrue(TEXT("asset holds the edit"), FMath::IsNearlyEqual(PieceMinZ(UModelingService::LoadMeshFromSkeletalMesh(MeshPath, 0).Handle, FVector(0, 200, 25)), 5.0, 0.05));
+
+	TestFalse(TEXT("unknown actor rejected"), UModelingService::LoadMeshFromSkinnedComponent(TEXT("NoSuchActor")).bSuccess);
+	const FModelingResult NoComponent = UModelingService::LoadMeshFromSkinnedComponent(TEXT("Vibe3DPoseTest"), TEXT("Hat"));
+	TestTrue(TEXT("unknown component lists the real ones"), !NoComponent.bSuccess && NoComponent.Message.Contains(TEXT("Follower")));
+	TestFalse(TEXT("unpose of an unposed handle rejected"), UModelingService::UnposeMesh(Posed.Handle).bSuccess);
+
+	Actor->Destroy();
+	FAssetCompilingManager::Get().FinishAllCompilation();
+	UModelingService::ReleaseAllMeshes();
+	TestTrue(TEXT("test folder removed"), UEditorAssetLibrary::DeleteDirectory(kModelingTestDir));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVibe3DModelingGarmentFitTest, "Vibe3D.Modeling.GarmentFit", kModelingTestFlags)
+bool FVibe3DModelingGarmentFitTest::RunTest(const FString&)
+{
+	FScopedModelingSession Session;
+	const auto Sphere = [](float Radius, bool bOpenTop)
+	{
+		const int32 H = UModelingService::CreateMesh().Handle;
+		UModelingService::AppendSphere(H, FTransform::Identity, Radius, 24, 32);
+		if (bOpenTop) { UModelingService::PlaneCut(H, FTransform(FVector(0, 0, 30)), false); }   // a "shirt": no cover above z = 30
+		return H;
+	};
+	const auto TopZ = [](int32 Handle)
+	{
+		double Top = -1e9;
+		for (const FVector& P : UModelingService::GetVertexPositions(Handle)) { Top = FMath::Max(Top, P.Z); }
+		return Top;
+	};
+
+	// Skin (r 50) pokes through a shirt (r 49, open above z 30).
+	const int32 Body = Sphere(50.f, false);
+	const int32 Shirt = Sphere(49.f, true);
+	const FModelingPenetrationReport Before = UModelingService::MeasurePenetration(Body, Shirt, TEXT("Inside"), 0.3f, 5.f, TEXT(""), TEXT("poking"));
+	TestTrue(FString::Printf(TEXT("penetration measured: %s"), *Before.Message), Before.bSuccess && Before.Violations > 0 && Before.MaxDepth > 1.0f && Before.MaxDepth < 3.0f);
+	AddInfo(Before.Message);
+	TestEqual(TEXT("offenders stored as a selection"), UModelingService::SelectionCount(Body, TEXT("poking")), Before.Violations);
+	const double HeadTop = TopZ(Body);
+	const FModelingResult Pushed = UModelingService::PushInside(Body, Shirt, 0.3f, TEXT(""), 5.f, 2);
+	TestTrue(FString::Printf(TEXT("push inside: %s"), *Pushed.Message), Pushed.bSuccess);
+	AddInfo(Pushed.Message);
+	const FModelingPenetrationReport After = UModelingService::MeasurePenetration(Body, Shirt, TEXT("Inside"), 0.3f);
+	TestTrue(FString::Printf(TEXT("skin under the shirt now: %s"), *After.Message), After.bSuccess && After.Violations == 0);
+	TestTrue(TEXT("uncovered head left alone"), FMath::IsNearlyEqual(TopZ(Body), HeadTop, 1e-4));
+
+	// A garment (r 48) sunk into the skin (r 50) is pushed out over it.
+	const int32 Skin = Sphere(50.f, false);
+	const int32 Sunk = Sphere(48.f, true);
+	TestTrue(TEXT("sunk garment detected"), UModelingService::MeasurePenetration(Sunk, Skin, TEXT("Outside"), 0.3f).Violations > 0);
+	TestTrue(TEXT("push outside"), UModelingService::PushOutside(Sunk, Skin, 0.3f, TEXT(""), 5.f, 2).bSuccess);
+	const FModelingPenetrationReport Over = UModelingService::MeasurePenetration(Sunk, Skin, TEXT("Outside"), 0.3f);
+	TestTrue(FString::Printf(TEXT("garment over the skin now: %s"), *Over.Message), Over.Violations == 0);
+
+	// Skin well inside a garment can be dropped; the uncovered part stays.
+	const int32 Inner = Sphere(45.f, false);
+	const int32 Total = UModelingService::GetMeshInfo(Inner).TriangleCount;
+	const int32 Hidden = UModelingService::SelectHiddenBy(Inner, TEXT("hidden"), Shirt, 0.5f, 10.f, true);
+	TestTrue(FString::Printf(TEXT("hidden triangles found (%d of %d)"), Hidden, Total), Hidden > Total / 4 && Hidden < Total);
+	TestTrue(TEXT("hidden faces deleted"), UModelingService::DeleteFaces(Inner, TEXT("hidden")).bSuccess && UModelingService::GetMeshInfo(Inner).TriangleCount == Total - Hidden);
+
+	TestFalse(TEXT("unknown side rejected"), UModelingService::MeasurePenetration(Body, Shirt, TEXT("Above")).bSuccess);
+	TestFalse(TEXT("self fit rejected"), UModelingService::PushInside(Body, Body).bSuccess);
+	TestEqual(TEXT("hidden-by on a missing handle"), UModelingService::SelectHiddenBy(Body, TEXT("x"), 4242), -1);
 	return true;
 }
 
