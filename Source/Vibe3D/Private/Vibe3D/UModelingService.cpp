@@ -68,6 +68,14 @@
 #include "Materials/Material.h"
 #include "MaterialDomain.h"
 #include "SkeletalMeshAttributes.h"
+#include "AssetImportTask.h"
+#include "AssetCompilingManager.h"
+#include "Engine/Texture.h"
+#include "Materials/MaterialInstance.h"
+#include "Misc/PackageName.h"
+#include "Misc/SecureHash.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "UObject/ObjectRedirector.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogVibe3DModeling, Log, All);
 
@@ -1887,6 +1895,383 @@ FModelingResult UModelingService::SetLODs(const FString& AssetPath, const TArray
 	R.bSuccess = true;
 	R.AssetPath = AssetPath;
 	R.Message = FString::Printf(TEXT("%s now has %d LODs"), *AssetPath, NumLODs);
+	return R;
+}
+
+// =========================================================================
+// Generated-prop intake
+// =========================================================================
+
+namespace
+{
+	const FName IntakeFingerprintTag(TEXT("Vibe3DIntakeFingerprint"));
+	const FName IntakeSourceTag(TEXT("Vibe3DIntakeSource"));
+
+	FModelingIntakeReport IntakeFail(const FString& AssetPath, const FString& Message)
+	{
+		FModelingIntakeReport R;
+		R.AssetPath = AssetPath;
+		R.Message = Message;
+		UE_LOG(LogVibe3DModeling, Warning, TEXT("IntakeGeneratedMesh failure (%s): %s"), *AssetPath, *Message);
+		return R;
+	}
+
+	/** The asset-side half of a report: counts, bounds, LODs, collision, slots and the textures those slots use. */
+	void DescribeIntakeAsset(UStaticMesh* StaticMesh, FModelingIntakeReport& R)
+	{
+		FAssetCompilingManager::Get().FinishAllCompilation();
+		R.TriangleCount = StaticMesh->GetNumTriangles(0);
+		R.VertexCount = StaticMesh->GetNumVertices(0);
+		const FBox Box = StaticMesh->GetBoundingBox();
+		R.BoundsMin = Box.Min;
+		R.BoundsMax = Box.Max;
+		R.LODCount = StaticMesh->GetNumLODs();
+		R.CollisionShapes = StaticMesh->GetBodySetup() ? StaticMesh->GetBodySetup()->AggGeom.GetElementCount() : 0;
+		R.MaterialPaths.Reset();
+		R.Textures.Reset();
+		TSet<UTexture*> Seen;
+		for (const FStaticMaterial& Slot : StaticMesh->GetStaticMaterials())
+		{
+			R.MaterialPaths.Add(Slot.MaterialInterface ? Slot.MaterialInterface->GetPathName() : FString(TEXT("None")));
+			if (const UMaterialInstance* Instance = Cast<UMaterialInstance>(Slot.MaterialInterface))
+			{
+				for (const FTextureParameterValue& Param : Instance->TextureParameterValues)
+				{
+					UTexture* Texture = Param.ParameterValue;
+					if (!Texture || Seen.Contains(Texture)) { continue; }
+					Seen.Add(Texture);
+					R.Textures.Add(FString::Printf(TEXT("%s %lldx%lld max %d"), *Texture->GetPathName(),
+						Texture->Source.GetSizeX(), Texture->Source.GetSizeY(), Texture->MaxTextureSize));
+				}
+			}
+		}
+	}
+
+	/** A free name in Folder for Desired: an existing asset of that name that nothing references any more (an earlier intake's) is deleted and its name reused. */
+	FString ClaimAssetName(const FString& Folder, const FString& Desired)
+	{
+		FString Name = Desired;
+		for (int32 Suffix = 2; Suffix < 100; ++Suffix)
+		{
+			const FString Path = Folder / Name;
+			if (!UEditorAssetLibrary::DoesAssetExist(Path)) { return Name; }
+			if (UEditorAssetLibrary::FindPackageReferencersForAsset(Path, true).Num() == 0 && UEditorAssetLibrary::DeleteAsset(Path)) { return Name; }
+			Name = FString::Printf(TEXT("%s_%d"), *Desired, Suffix);
+		}
+		return Name;
+	}
+
+	FString SanitizeAssetName(const FString& In)
+	{
+		FString Out;
+		for (const TCHAR C : In)
+		{
+			Out.AppendChar(FChar::IsAlnum(C) ? C : TEXT('_'));
+		}
+		return Out.IsEmpty() ? FString(TEXT("Tex")) : Out;
+	}
+}
+
+FModelingIntakeReport UModelingService::IntakeGeneratedMesh(const FString& SourceFile, const FString& AssetPath, float TargetSizeCm, const FString& FitAxis,
+	float YawDeg, const FString& Pivot, int32 MaxTriangles, int32 MaxTextureSize, const FString& Collision, int32 MaxConvexHulls, const FString& LODPercents,
+	FVector TargetBoxCm, bool bEnableNanite, bool bForce, bool bSaveAsset)
+{
+	// ---- validate everything before touching the project
+	FString File = SourceFile.TrimStartAndEnd().TrimQuotes();
+	FPaths::NormalizeFilename(File);
+	if (!FPaths::FileExists(File)) { return IntakeFail(AssetPath, FString::Printf(TEXT("Source file not found: %s"), *File)); }
+	if (!AssetPath.StartsWith(TEXT("/")) || AssetPath.Contains(TEXT(".")) || FPackageName::GetLongPackagePath(AssetPath).IsEmpty())
+	{
+		return IntakeFail(AssetPath, TEXT("AssetPath must be a package path like /Game/Props/Lamp/SM_Lamp (materials and textures go next to it)"));
+	}
+	const FString Fit = FitAxis.TrimStartAndEnd();
+	static const TArray<FString> Fits = { TEXT("Height"), TEXT("Width"), TEXT("Depth"), TEXT("Longest"), TEXT("Box"), TEXT("None") };
+	if (!Fits.ContainsByPredicate([&Fit](const FString& F) { return F.Equals(Fit, ESearchCase::IgnoreCase); }))
+	{
+		return IntakeFail(AssetPath, FString::Printf(TEXT("Unknown FitAxis '%s' (use Height, Width, Depth, Longest, Box, None)"), *FitAxis));
+	}
+	const bool bFitBox = Fit.Equals(TEXT("Box"), ESearchCase::IgnoreCase);
+	const bool bFitNone = Fit.Equals(TEXT("None"), ESearchCase::IgnoreCase);
+	if (bFitBox && TargetBoxCm.GetMin() <= 0.0) { return IntakeFail(AssetPath, TEXT("FitAxis 'Box' needs TargetBoxCm with three positive sizes (X, Y, Z in cm)")); }
+	if (!bFitBox && !bFitNone && TargetSizeCm <= 0.f) { return IntakeFail(AssetPath, TEXT("TargetSizeCm must be positive")); }
+	const FString PivotMode = Pivot.TrimStartAndEnd();
+	static const TArray<FString> Pivots = { TEXT("BottomCenter"), TEXT("Center"), TEXT("TopCenter"), TEXT("None") };
+	if (!Pivots.ContainsByPredicate([&PivotMode](const FString& P) { return P.Equals(PivotMode, ESearchCase::IgnoreCase); }))
+	{
+		return IntakeFail(AssetPath, FString::Printf(TEXT("Unknown Pivot '%s' (use BottomCenter, Center, TopCenter, None)"), *Pivot));
+	}
+	FString CollisionMethod = Collision.TrimStartAndEnd();
+	if (CollisionMethod.Equals(TEXT("Box"), ESearchCase::IgnoreCase)) { CollisionMethod = TEXT("AlignedBoxes"); }
+	else if (CollisionMethod.Equals(TEXT("Hulls"), ESearchCase::IgnoreCase)) { CollisionMethod = TEXT("ConvexHulls"); }
+	const bool bCollision = !CollisionMethod.Equals(TEXT("None"), ESearchCase::IgnoreCase) && !CollisionMethod.IsEmpty();
+	EGeometryScriptCollisionGenerationMethod ParsedMethod;
+	if (bCollision && !ParseEnum(CollisionMethod, ParsedMethod))
+	{
+		return IntakeFail(AssetPath, FString::Printf(TEXT("Unknown Collision '%s' (use None, Box, Hulls, %s)"), *Collision, *EnumNames<EGeometryScriptCollisionGenerationMethod>()));
+	}
+	TArray<float> LODs;
+	{
+		TArray<FString> Parts;
+		LODPercents.ParseIntoArray(Parts, TEXT(","), true);
+		for (FString& Part : Parts)
+		{
+			Part.TrimStartAndEndInline();
+			const float Value = FCString::Atof(*Part);
+			if (!Part.IsNumeric() || Value <= 0.f || Value > 1.f) { return IntakeFail(AssetPath, FString::Printf(TEXT("LODPercents '%s': every entry must be a fraction in (0, 1], e.g. \"1,0.5,0.25\""), *LODPercents)); }
+			LODs.Add(Value);
+		}
+	}
+
+	UStaticMesh* Existing = nullptr;
+	if (UEditorAssetLibrary::DoesAssetExist(AssetPath))
+	{
+		Existing = LoadAssetAs<UStaticMesh>(AssetPath);
+		if (!Existing) { return IntakeFail(AssetPath, FString::Printf(TEXT("%s exists but is not a StaticMesh"), *AssetPath)); }
+	}
+	const FString Fingerprint = LexToString(FMD5Hash::HashFile(*File)) + FString::Printf(TEXT("|%g|%s|%g|%s|%d|%d|%s|%d|%s|%s|%d"),
+		TargetSizeCm, *Fit, YawDeg, *PivotMode, MaxTriangles, MaxTextureSize, *CollisionMethod, MaxConvexHulls, *LODPercents, *TargetBoxCm.ToString(), bEnableNanite ? 1 : 0);
+	if (Existing && !bForce && UEditorAssetLibrary::GetMetadataTag(Existing, IntakeFingerprintTag) == Fingerprint)
+	{
+		FModelingIntakeReport R;
+		R.bSuccess = true;
+		R.bUpToDate = true;
+		R.AssetPath = AssetPath;
+		DescribeIntakeAsset(Existing, R);
+		R.Message = FString::Printf(TEXT("%s is up to date with %s and these settings (%d tris, %d LODs); nothing re-imported (pass force=True to redo it)"),
+			*AssetPath, *FPaths::GetCleanFilename(File), R.TriangleCount, R.LODCount);
+		return R;
+	}
+
+	const FString Folder = FPackageName::GetLongPackagePath(AssetPath);
+	FString Base = FPackageName::GetShortName(AssetPath);
+	Base.RemoveFromStart(TEXT("SM_"));
+	const FString Stage = Folder / (TEXT("_Intake_") + Base);
+	const auto DropStage = [&Stage]()
+	{
+		if (UEditorAssetLibrary::DoesDirectoryExist(Stage)) { UEditorAssetLibrary::DeleteDirectory(Stage); }
+	};
+	DropStage();
+
+	// ---- 1. import into a staging folder
+	UAssetImportTask* Task = NewObject<UAssetImportTask>();
+	Task->Filename = File;
+	Task->DestinationPath = Stage;
+	Task->bAutomated = true;
+	Task->bReplaceExisting = true;
+	Task->bSave = false;
+	Task->bAsync = false;
+	FAssetToolsModule::GetModule().Get().ImportAssetTasks({ Task });
+	FAssetCompilingManager::Get().FinishAllCompilation();
+
+	TArray<UStaticMesh*> Meshes;
+	TArray<UTexture*> StagedTextures;
+	TSet<FString> OtherClasses;
+	for (const FString& Path : UEditorAssetLibrary::ListAssets(Stage, true, false))
+	{
+		UObject* Object = UEditorAssetLibrary::LoadAsset(Path);
+		if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Object)) { Meshes.Add(StaticMesh); }
+		else if (UTexture* Texture = Cast<UTexture>(Object)) { StagedTextures.Add(Texture); }
+		else if (Object && !Object->IsA<UMaterialInterface>()) { OtherClasses.Add(Object->GetClass()->GetName()); }
+	}
+	if (Meshes.Num() == 0)
+	{
+		DropStage();
+		return IntakeFail(AssetPath, FString::Printf(TEXT("Importing %s produced no StaticMesh%s (a skinned or animated file imports as a SkeletalMesh; intake is for static props)"),
+			*File, OtherClasses.Num() ? *FString::Printf(TEXT(" (got %s)"), *FString::Join(OtherClasses.Array(), TEXT(", "))) : TEXT("")));
+	}
+	Meshes.Sort([](const UStaticMesh& A, const UStaticMesh& B) { return A.GetName() < B.GetName(); });
+
+	// ---- 2. merge every mesh of the file into one session mesh with one material list
+	FModelingIntakeReport R;
+	R.AssetPath = AssetPath;
+	R.SourceMeshCount = Meshes.Num();
+	int32 Handle = -1;
+	UDynamicMesh* Combined = NewSessionMesh(Handle);
+	const auto Abort = [&](const FString& Why)
+	{
+		ReleaseMesh(Handle);
+		DropStage();
+		return IntakeFail(AssetPath, Why);
+	};
+	TArray<UMaterialInterface*> Materials;
+	UGeometryScriptDebug* Debug = NewDebug();
+	for (UStaticMesh* StaticMesh : Meshes)
+	{
+		UDynamicMesh* Part = NewScratchMesh();
+		if (!CopyFromStaticMesh(StaticMesh, Part, 0, Debug)) { return Abort(FString::Printf(TEXT("Could not read imported %s: %s"), *StaticMesh->GetName(), *DebugText(Debug))); }
+		R.SourceTriangles += TriCount(Part);
+		TArray<UMaterialInterface*> PartMaterials;
+		TArray<int32> MaterialIndices;
+		TArray<FName> SlotNames;
+		EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+		UGeometryScriptLibrary_StaticMeshFunctions::GetSectionMaterialListFromStaticMesh(StaticMesh, FGeometryScriptMeshReadLOD(), PartMaterials, MaterialIndices, SlotNames, Outcome, Debug);
+		TArray<UMaterialInterface*> Merged;
+		UGeometryScriptLibrary_MeshBasicEditFunctions::AppendMeshWithMaterials(Combined, Materials, Part, PartMaterials, Merged, FTransform::Identity, false,
+			FGeometryScriptAppendMeshOptions(), true, Debug);
+		Materials = Merged;
+	}
+	if (TriCount(Combined) == 0) { return Abort(FString::Printf(TEXT("%s has no triangles"), *File)); }
+
+	// ---- 3. orient, fit to real-world size, pivot
+	if (!FMath::IsNearlyZero(YawDeg)) { RotateMesh(Handle, FRotator(0.f, YawDeg, 0.f), FVector::ZeroVector); }
+	FBox Bounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(Combined);
+	const FVector Size = Bounds.GetSize();
+	R.SourceSize = Size;
+	FVector Scale = FVector::OneVector;
+	if (bFitBox)
+	{
+		for (int32 Axis = 0; Axis < 3; ++Axis)
+		{
+			Scale[Axis] = Size[Axis] > UE_KINDA_SMALL_NUMBER ? TargetBoxCm[Axis] / Size[Axis] : 1.0;   // a flat card keeps its zero thickness
+		}
+	}
+	else if (!bFitNone)
+	{
+		const double Measured = Fit.Equals(TEXT("Height"), ESearchCase::IgnoreCase) ? Size.Z
+			: Fit.Equals(TEXT("Width"), ESearchCase::IgnoreCase) ? Size.X
+			: Fit.Equals(TEXT("Depth"), ESearchCase::IgnoreCase) ? Size.Y : Size.GetMax();
+		if (Measured <= UE_KINDA_SMALL_NUMBER) { return Abort(FString::Printf(TEXT("The model has no extent along FitAxis '%s' (size %s cm)"), *Fit, *Size.ToCompactString())); }
+		Scale = FVector(TargetSizeCm / Measured);
+	}
+	if (!Scale.Equals(FVector::OneVector, 1e-6)) { ScaleMesh(Handle, Scale, FVector::ZeroVector); }
+	R.ScaleApplied = Scale;
+	Bounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(Combined);
+	const FVector Center = Bounds.GetCenter();
+	FVector Shift = FVector::ZeroVector;
+	if (PivotMode.Equals(TEXT("BottomCenter"), ESearchCase::IgnoreCase)) { Shift = FVector(-Center.X, -Center.Y, -Bounds.Min.Z); }
+	else if (PivotMode.Equals(TEXT("TopCenter"), ESearchCase::IgnoreCase)) { Shift = FVector(-Center.X, -Center.Y, -Bounds.Max.Z); }
+	else if (PivotMode.Equals(TEXT("Center"), ESearchCase::IgnoreCase)) { Shift = -Center; }
+	if (!Shift.IsNearlyZero()) { TranslateMesh(Handle, Shift); }
+
+	// ---- 4. decimate
+	if (MaxTriangles > 0 && TriCount(Combined) > MaxTriangles)
+	{
+		SimplifyToTriangleCount(Handle, MaxTriangles, true);
+	}
+
+	// ---- 5. write ONE static mesh (in place when it exists, so placed actors keep their reference)
+	TArray<FName> SlotNames;
+	for (int32 i = 0; i < Materials.Num(); ++i) { SlotNames.Add(*FString::Printf(TEXT("Material_%d"), i)); }
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+	UStaticMesh* Target = Existing;
+	if (Existing)
+	{
+		FGeometryScriptCopyMeshToAssetOptions Options;
+		Options.bReplaceMaterials = true;
+		for (UMaterialInterface* Material : Materials) { Options.NewMaterials.Add(Material); }
+		Options.NewMaterialSlotNames = SlotNames;
+		Options.bApplyNaniteSettings = true;
+		Options.NewNaniteSettings.bEnabled = bEnableNanite;
+		FGeometryScriptMeshWriteLOD WriteLOD;
+		WriteLOD.LODIndex = 0;
+		UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshToStaticMesh(Combined, Existing, Options, WriteLOD, Outcome, true, Debug);
+	}
+	else
+	{
+		FGeometryScriptCreateNewStaticMeshAssetOptions Options;
+		Options.bEnableNanite = bEnableNanite;
+		Options.bEnableCollision = bCollision;
+		Target = UGeometryScriptLibrary_CreateNewAssetFunctions::CreateNewStaticMeshAssetFromMesh(Combined, AssetPath, Options, Outcome, Debug);
+		if (Target)
+		{
+			TArray<FStaticMaterial> Slots;
+			for (int32 i = 0; i < Materials.Num(); ++i) { Slots.Add(FStaticMaterial(Materials[i], SlotNames[i])); }
+			Target->SetStaticMaterials(Slots);
+			Target->PostEditChange();
+		}
+	}
+	if (Outcome != EGeometryScriptOutcomePins::Success || !Target) { return Abort(FString::Printf(TEXT("Writing %s failed: %s"), *AssetPath, *DebugText(Debug))); }
+	ReleaseMesh(Handle);
+
+	// ---- 6. keep the materials and textures (next to the mesh, stable names); drop the rest of the import
+	TArray<UObject*> ToSave = { Target };
+	TArray<FString> MovedFrom;
+	const FString StagePrefix = Stage + TEXT("/");
+	const auto Move = [&](UObject* Object, const FString& DesiredName)
+	{
+		const FString OldPackage = Object->GetOutermost()->GetName();
+		const FString NewName = ClaimAssetName(Folder, DesiredName);
+		if (UEditorAssetLibrary::RenameAsset(OldPackage, Folder / NewName))
+		{
+			MovedFrom.Add(OldPackage + TEXT(".") + Object->GetName());
+			ToSave.Add(Object);
+		}
+	};
+	TMap<UTexture*, FString> TextureNames;
+	for (int32 i = 0; i < Materials.Num(); ++i)
+	{
+		if (const UMaterialInstance* Instance = Cast<UMaterialInstance>(Materials[i]))
+		{
+			for (const FTextureParameterValue& Param : Instance->TextureParameterValues)
+			{
+				if (Param.ParameterValue && !TextureNames.Contains(Param.ParameterValue))
+				{
+					FString Role = Param.ParameterInfo.Name.ToString();
+					Role.RemoveFromEnd(TEXT("Texture"));
+					Role.RemoveFromEnd(TEXT("Map"));
+					TextureNames.Add(Param.ParameterValue, FString::Printf(TEXT("T_%s_%s%s"), *Base, *SanitizeAssetName(Role),
+						Materials.Num() > 1 ? *FString::Printf(TEXT("_%d"), i) : TEXT("")));
+				}
+			}
+		}
+	}
+	for (int32 i = 0; i < Materials.Num(); ++i)
+	{
+		if (Materials[i] && Materials[i]->GetPathName().StartsWith(StagePrefix))
+		{
+			Move(Materials[i], FString::Printf(TEXT("%s_%s_%d"), Materials[i]->IsA<UMaterialInstance>() ? TEXT("MI") : TEXT("M"), *Base, i));
+		}
+	}
+	for (UTexture* Texture : StagedTextures)   // every texture of the import: a plain UMaterial can reference them without parameters
+	{
+		const FString* Named = TextureNames.Find(Texture);
+		Move(Texture, Named ? *Named : FString::Printf(TEXT("T_%s_%s"), *Base, *SanitizeAssetName(Texture->GetName())));
+		if (MaxTextureSize > 0 && FMath::Max(Texture->Source.GetSizeX(), Texture->Source.GetSizeY()) > MaxTextureSize)
+		{
+			Texture->Modify();
+			Texture->MaxTextureSize = MaxTextureSize;
+			Texture->PostEditChange();
+		}
+	}
+	TArray<UObjectRedirector*> Redirectors;
+	for (const FString& Old : MovedFrom)
+	{
+		if (UObjectRedirector* Redirector = FindObject<UObjectRedirector>(nullptr, *Old)) { Redirectors.Add(Redirector); }
+	}
+	if (Redirectors.Num()) { FAssetToolsModule::GetModule().Get().FixupReferencers(Redirectors, false); }
+	DropStage();
+
+	// ---- 7. LODs, collision, provenance
+	if (LODs.Num() > 0 || Target->GetNumSourceModels() > 1)
+	{
+		const FModelingResult LODResult = SetLODs(AssetPath, LODs.Num() ? LODs : TArray<float>{ 1.f }, true, false);
+		if (!LODResult.bSuccess) { return IntakeFail(AssetPath, LODResult.Message); }
+	}
+	if (bCollision)
+	{
+		const FModelingResult CollisionResult = GenerateCollision(AssetPath, CollisionMethod, MaxConvexHulls, 25, false);
+		if (!CollisionResult.bSuccess) { return IntakeFail(AssetPath, CollisionResult.Message); }
+	}
+	else if (UBodySetup* Body = Target->GetBodySetup())
+	{
+		Body->Modify();
+		Body->RemoveSimpleCollision();
+	}
+	UEditorAssetLibrary::SetMetadataTag(Target, IntakeSourceTag, File);
+	UEditorAssetLibrary::SetMetadataTag(Target, IntakeFingerprintTag, Fingerprint);
+	Target->MarkPackageDirty();
+	if (bSaveAsset) { UEditorAssetLibrary::SaveLoadedAssets(ToSave, false); }
+
+	// ---- 8. report
+	R.bSuccess = true;
+	DescribeIntakeAsset(Target, R);
+	const double Aniso = Scale.GetMax() / FMath::Max(Scale.GetMin(), UE_SMALL_NUMBER) - 1.0;
+	R.Message = FString::Printf(TEXT("%s %s from %s: %d mesh(es), %d -> %d tris, size %s cm (imported %s, scale %s%s), %d LOD(s), %d collision shape(s), %d material slot(s), %d texture(s)%s"),
+		Existing ? TEXT("Replaced") : TEXT("Created"), *AssetPath, *FPaths::GetCleanFilename(File), R.SourceMeshCount, R.SourceTriangles, R.TriangleCount,
+		*(R.BoundsMax - R.BoundsMin).ToCompactString(), *Size.ToCompactString(), *Scale.ToCompactString(),
+		Aniso > 0.05 ? *FString::Printf(TEXT(", stretched %.0f%%: check the proportions"), Aniso * 100.0) : TEXT(""),
+		R.LODCount, R.CollisionShapes, R.MaterialPaths.Num(), R.Textures.Num(),
+		MaxTextureSize > 0 ? *FString::Printf(TEXT(" capped at %d"), MaxTextureSize) : TEXT(""));
 	return R;
 }
 

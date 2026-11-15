@@ -15,6 +15,9 @@
 #include "Editor.h"
 #include "GameFramework/Actor.h"
 #include "Subsystems/EditorActorSubsystem.h"
+#include "UDynamicMesh.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "Engine/StaticMesh.h"
 
 // Self-provisioning: every test builds its own geometry through the service, writes only under
 // kModelingTestDir, and releases / deletes what it made. No project content is required.
@@ -42,6 +45,88 @@ namespace
 		const int32 Handle = UModelingService::CreateMesh().Handle;
 		UModelingService::AppendSphere(Handle, FTransform::Identity, Radius, 12, 18);
 		return Handle;
+	}
+
+	/**
+	 * Write a minimal binary glTF the way an image-to-3D service delivers one: one node per session mesh (positions in
+	 * metres, Y up, a planar UV), one material whose base colour is an embedded TextureSize^2 PNG. No content on disk needed.
+	 */
+	bool WriteTestGLB(const FString& Path, const TArray<int32>& Handles, int32 TextureSize)
+	{
+		TArray<uint8> Bin;
+		const auto Align = [&Bin]() { while (Bin.Num() % 4) { Bin.Add(0); } };
+		const auto Append = [&Bin](const void* Data, int32 Bytes) { Bin.Append(static_cast<const uint8*>(Data), Bytes); };
+		TArray<FString> Accessors, Views, Meshes, Nodes;
+		const auto AddView = [&](int32 Offset, int32 Length)
+		{
+			Views.Add(FString::Printf(TEXT("{\"buffer\":0,\"byteOffset\":%d,\"byteLength\":%d}"), Offset, Length));
+			return Views.Num() - 1;
+		};
+		for (const int32 Handle : Handles)
+		{
+			TArray<FVector3f> Positions;
+			TArray<FVector2f> UVs;
+			TArray<uint32> Indices;
+			UModelingService::GetDynamicMesh(Handle)->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& M)
+			{
+				TMap<int32, int32> Remap;
+				for (const int32 Vid : M.VertexIndicesItr())
+				{
+					const FVector P = M.GetVertex(Vid);
+					Remap.Add(Vid, Positions.Num());
+					Positions.Add(FVector3f(P.X, P.Z, P.Y) / 100.f);   // UE cm Z-up -> glTF m Y-up
+					UVs.Add(FVector2f(P.X / 200.f + 0.5f, P.Z / 200.f + 0.5f));
+				}
+				for (const int32 Tid : M.TriangleIndicesItr())
+				{
+					const UE::Geometry::FIndex3i T = M.GetTriangle(Tid);
+					Indices.Append({ static_cast<uint32>(Remap[T.A]), static_cast<uint32>(Remap[T.C]), static_cast<uint32>(Remap[T.B]) });
+				}
+			});
+			FBox3f Box(Positions);
+			Align(); const int32 PosOffset = Bin.Num(); Append(Positions.GetData(), Positions.Num() * sizeof(FVector3f));
+			Align(); const int32 UVOffset = Bin.Num(); Append(UVs.GetData(), UVs.Num() * sizeof(FVector2f));
+			Align(); const int32 IdxOffset = Bin.Num(); Append(Indices.GetData(), Indices.Num() * sizeof(uint32));
+			const int32 PosView = AddView(PosOffset, Positions.Num() * sizeof(FVector3f));
+			const int32 UVView = AddView(UVOffset, UVs.Num() * sizeof(FVector2f));
+			const int32 IdxView = AddView(IdxOffset, Indices.Num() * sizeof(uint32));
+			const int32 First = Accessors.Num();
+			Accessors.Add(FString::Printf(TEXT("{\"bufferView\":%d,\"componentType\":5126,\"count\":%d,\"type\":\"VEC3\",\"min\":[%f,%f,%f],\"max\":[%f,%f,%f]}"),
+				PosView, Positions.Num(), Box.Min.X, Box.Min.Y, Box.Min.Z, Box.Max.X, Box.Max.Y, Box.Max.Z));
+			Accessors.Add(FString::Printf(TEXT("{\"bufferView\":%d,\"componentType\":5126,\"count\":%d,\"type\":\"VEC2\"}"), UVView, UVs.Num()));
+			Accessors.Add(FString::Printf(TEXT("{\"bufferView\":%d,\"componentType\":5125,\"count\":%d,\"type\":\"SCALAR\"}"), IdxView, Indices.Num()));
+			Meshes.Add(FString::Printf(TEXT("{\"primitives\":[{\"attributes\":{\"POSITION\":%d,\"TEXCOORD_0\":%d},\"indices\":%d,\"material\":0}]}"), First, First + 1, First + 2));
+			Nodes.Add(FString::Printf(TEXT("{\"mesh\":%d,\"name\":\"Part%d\"}"), Meshes.Num() - 1, Meshes.Num() - 1));
+		}
+		TArray<FColor> Pixels;
+		for (int32 Y = 0; Y < TextureSize; ++Y)
+		{
+			for (int32 X = 0; X < TextureSize; ++X) { Pixels.Add(((X / 8 + Y / 8) % 2) ? FColor(200, 60, 40) : FColor(240, 220, 200)); }
+		}
+		TArray64<uint8> Png;
+		FImageUtils::PNGCompressImageArray(TextureSize, TextureSize, TArrayView64<const FColor>(Pixels.GetData(), Pixels.Num()), Png);
+		Align(); const int32 PngOffset = Bin.Num(); Append(Png.GetData(), static_cast<int32>(Png.Num()));
+		const int32 PngView = AddView(PngOffset, static_cast<int32>(Png.Num()));
+		Align();
+
+		TArray<FString> NodeIds;
+		for (int32 i = 0; i < Nodes.Num(); ++i) { NodeIds.Add(FString::FromInt(i)); }
+		FString Json = FString::Printf(TEXT("{\"asset\":{\"version\":\"2.0\",\"generator\":\"Vibe3D test\"},\"scene\":0,\"scenes\":[{\"nodes\":[%s]}],\"nodes\":[%s],\"meshes\":[%s],")
+			TEXT("\"materials\":[{\"name\":\"Generated\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0},\"metallicFactor\":0.0,\"roughnessFactor\":0.8}}],")
+			TEXT("\"textures\":[{\"source\":0}],\"images\":[{\"bufferView\":%d,\"mimeType\":\"image/png\",\"name\":\"albedo\"}],")
+			TEXT("\"accessors\":[%s],\"bufferViews\":[%s],\"buffers\":[{\"byteLength\":%d}]}"),
+			*FString::Join(NodeIds, TEXT(",")), *FString::Join(Nodes, TEXT(",")), *FString::Join(Meshes, TEXT(",")), PngView,
+			*FString::Join(Accessors, TEXT(",")), *FString::Join(Views, TEXT(",")), Bin.Num());
+		FTCHARToUTF8 Utf8(*Json);
+		TArray<uint8> JsonBytes(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+		while (JsonBytes.Num() % 4) { JsonBytes.Add(' '); }
+
+		TArray<uint8> Out;
+		const auto Put32 = [&Out](uint32 V) { Out.Append(reinterpret_cast<const uint8*>(&V), 4); };
+		Put32(0x46546C67); Put32(2); Put32(12 + 8 + JsonBytes.Num() + 8 + Bin.Num());
+		Put32(JsonBytes.Num()); Put32(0x4E4F534A); Out.Append(JsonBytes);
+		Put32(Bin.Num()); Put32(0x004E4942); Out.Append(Bin);
+		return FFileHelper::SaveArrayToFile(Out, *Path);
 	}
 }
 
@@ -652,6 +737,78 @@ bool FVibe3DModelingVertexArraysTest::RunTest(const FString&)
 	for (FVector& P : GapPositions) { P.X -= 300.0; }
 	TestTrue(TEXT("gap layout accepted"), UModelingService::SetVertexPositions(G, GapPositions).bSuccess);
 	TestTrue(TEXT("remaining box moved to the origin"), FMath::IsNearlyEqual(UModelingService::GetMeshInfo(G).BoundsMin.X, -25.0, 0.001));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVibe3DModelingIntakeTest, "Vibe3D.Modeling.IntakeGeneratedMesh", kModelingTestFlags)
+bool FVibe3DModelingIntakeTest::RunTest(const FString&)
+{
+	FScopedModelingSession Session;
+	const FString Folder = FString(kModelingTestDir) / TEXT("Intake");
+	const FString AssetPath = Folder / TEXT("SM_TestProp");
+	if (UEditorAssetLibrary::DoesDirectoryExist(kModelingTestDir)) { UEditorAssetLibrary::DeleteDirectory(kModelingTestDir); }
+
+	// A generated "prop": a sphere and a separate tall box, two meshes in one GLB, a 64 px texture. 150 cm tall as delivered.
+	const int32 Sphere = MakeSphere(50.f);
+	const int32 Box = UModelingService::CreateMesh().Handle;
+	UModelingService::AppendBox(Box, FTransform(FVector(100, 0, 0)), 40.f, 40.f, 100.f, 2, 2, 6);
+	const FString File = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("Vibe3DTests/intake_test.glb"));
+	TestTrue(TEXT("test GLB written"), WriteTestGLB(File, { Sphere, Box }, 64));
+
+	const FModelingIntakeReport First = UModelingService::IntakeGeneratedMesh(File, AssetPath, 75.f, TEXT("Height"), 0.f, TEXT("BottomCenter"),
+		200, 32, TEXT("ConvexHulls"), 4, TEXT("1,0.5"));
+	TestTrue(FString::Printf(TEXT("intake succeeds: %s"), *First.Message), First.bSuccess);
+	AddInfo(First.Message);
+	TestTrue(TEXT("asset exists"), UEditorAssetLibrary::DoesAssetExist(AssetPath));
+	TestTrue(TEXT("both meshes read"), First.SourceMeshCount >= 1 && First.SourceTriangles > 200);
+	TestTrue(FString::Printf(TEXT("decimated to the budget (%d)"), First.TriangleCount), First.TriangleCount > 0 && First.TriangleCount <= 210);
+	TestTrue(FString::Printf(TEXT("fitted to 75 cm tall (%s..%s)"), *First.BoundsMin.ToString(), *First.BoundsMax.ToString()),
+		FMath::IsNearlyEqual(First.BoundsMax.Z - First.BoundsMin.Z, 75.0, 1.0));
+	TestTrue(TEXT("pivot at the floor"), FMath::IsNearlyEqual(First.BoundsMin.Z, 0.0, 0.5));
+	TestTrue(TEXT("pivot centred in XY"), FMath::Abs(First.BoundsMin.X + First.BoundsMax.X) < 1.0 && FMath::Abs(First.BoundsMin.Y + First.BoundsMax.Y) < 1.0);
+	TestTrue(TEXT("uniform scale"), FMath::IsNearlyEqual(First.ScaleApplied.X, First.ScaleApplied.Z, 1e-4));
+	TestEqual(TEXT("two LODs"), First.LODCount, 2);
+	TestTrue(TEXT("collision built"), First.CollisionShapes >= 1);
+	TestEqual(TEXT("one material slot"), First.MaterialPaths.Num(), 1);
+	if (First.MaterialPaths.Num() == 1) { TestTrue(FString::Printf(TEXT("material moved next to the mesh (%s)"), *First.MaterialPaths[0]), First.MaterialPaths[0].StartsWith(Folder / TEXT("M"))); }
+	TestEqual(TEXT("one texture"), First.Textures.Num(), 1);
+	if (First.Textures.Num() == 1) { TestTrue(FString::Printf(TEXT("texture capped (%s)"), *First.Textures[0]), First.Textures[0].EndsWith(TEXT("max 32")) && First.Textures[0].StartsWith(Folder / TEXT("T_TestProp_"))); }
+	TestFalse(TEXT("staging folder removed"), UEditorAssetLibrary::DoesDirectoryExist(Folder / TEXT("_Intake_TestProp")));
+	int32 StaticMeshes = 0;
+	for (const FString& Path : UEditorAssetLibrary::ListAssets(Folder, true, false))
+	{
+		if (Cast<UStaticMesh>(UEditorAssetLibrary::LoadAsset(Path))) { ++StaticMeshes; }
+	}
+	TestEqual(TEXT("exactly one static mesh kept"), StaticMeshes, 1);
+	UStaticMesh* Asset = LoadObject<UStaticMesh>(nullptr, *AssetPath);
+
+	// Same file and settings: nothing to do.
+	const FModelingIntakeReport Again = UModelingService::IntakeGeneratedMesh(File, AssetPath, 75.f, TEXT("Height"), 0.f, TEXT("BottomCenter"),
+		200, 32, TEXT("ConvexHulls"), 4, TEXT("1,0.5"));
+	TestTrue(FString::Printf(TEXT("second run is up to date: %s"), *Again.Message), Again.bSuccess && Again.bUpToDate);
+
+	// New settings replace the asset in place (same object, so placed actors keep it) without piling up materials.
+	const FModelingIntakeReport Boxed = UModelingService::IntakeGeneratedMesh(File, AssetPath, 0.f, TEXT("Box"), 90.f, TEXT("Center"),
+		0, 0, TEXT("Box"), 1, TEXT(""), FVector(60, 30, 90));
+	TestTrue(FString::Printf(TEXT("box fit succeeds: %s"), *Boxed.Message), Boxed.bSuccess && !Boxed.bUpToDate);
+	AddInfo(Boxed.Message);
+	TestTrue(TEXT("replaced in place"), LoadObject<UStaticMesh>(nullptr, *AssetPath) == Asset);
+	const FVector BoxSize = Boxed.BoundsMax - Boxed.BoundsMin;
+	TestTrue(FString::Printf(TEXT("stretched to the box (%s)"), *BoxSize.ToString()), BoxSize.Equals(FVector(60, 30, 90), 1.0));
+	TestTrue(TEXT("centre pivot"), (Boxed.BoundsMax + Boxed.BoundsMin).IsNearlyZero(1.0));
+	TestEqual(TEXT("LODs cleared back to one"), Boxed.LODCount, 1);
+	TestFalse(TEXT("no duplicate material"), UEditorAssetLibrary::DoesAssetExist(Folder / TEXT("MI_TestProp_0_2")) || UEditorAssetLibrary::DoesAssetExist(Folder / TEXT("M_TestProp_0_2")));
+
+	// Refusals.
+	TestFalse(TEXT("missing file rejected"), UModelingService::IntakeGeneratedMesh(File + TEXT(".missing"), AssetPath).bSuccess);
+	TestFalse(TEXT("unknown fit rejected"), UModelingService::IntakeGeneratedMesh(File, AssetPath, 50.f, TEXT("Diagonal")).bSuccess);
+	TestFalse(TEXT("box fit without a box rejected"), UModelingService::IntakeGeneratedMesh(File, AssetPath, 50.f, TEXT("Box")).bSuccess);
+	TestFalse(TEXT("bad LOD list rejected"), UModelingService::IntakeGeneratedMesh(File, AssetPath, 50.f, TEXT("Height"), 0.f, TEXT("BottomCenter"), 0, 0, TEXT("None"), 1, TEXT("1,2")).bSuccess);
+
+	FAssetCompilingManager::Get().FinishAllCompilation();
+	UModelingService::ReleaseAllMeshes();
+	IFileManager::Get().Delete(*File);
+	TestTrue(TEXT("test folder removed"), UEditorAssetLibrary::DeleteDirectory(kModelingTestDir));
 	return true;
 }
 

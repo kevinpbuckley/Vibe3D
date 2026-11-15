@@ -268,6 +268,70 @@ struct FModelingBoneInfo
 	int32 InfluencedVertices = 0;
 };
 
+/** What IntakeGeneratedMesh did to a generated model: read it before placing the prop. */
+USTRUCT(BlueprintType)
+struct FModelingIntakeReport
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	bool bSuccess = false;
+
+	/** One-paragraph summary (also the failure reason). */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	FString Message;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	FString AssetPath;
+
+	/** True when the asset already matched this file and these settings, so nothing was re-imported. */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	bool bUpToDate = false;
+
+	/** Static meshes the file produced (merged into one asset). */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 SourceMeshCount = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 SourceTriangles = 0;
+
+	/** LOD0 triangles after decimation. */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 TriangleCount = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 VertexCount = 0;
+
+	/** Imported size before the fit, in cm (after the yaw). */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	FVector SourceSize = FVector::ZeroVector;
+
+	/** Scale applied per axis; unequal values mean the fit stretched the model (FitAxis "Box"). */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	FVector ScaleApplied = FVector::OneVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	FVector BoundsMin = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	FVector BoundsMax = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 LODCount = 1;
+
+	/** Simple collision shapes on the asset (0 with Collision "None"). */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	int32 CollisionShapes = 0;
+
+	/** Material slot assets, in slot order. */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	TArray<FString> MaterialPaths;
+
+	/** One line per texture: "<path> <source W>x<H> max <cap>". */
+	UPROPERTY(BlueprintReadWrite, Category = "Vibe3D|Modeling")
+	TArray<FString> Textures;
+};
+
 /**
  * Programmatic mesh modeling — the operator half of Unreal's Modeling Mode, driven without a
  * viewport. Meshes live in an in-editor session as integer handles wrapping a UDynamicMesh:
@@ -664,6 +728,23 @@ public:
 	/** Rebuild the asset's LOD chain: one entry per LOD as a fraction of LOD0 triangles (LOD0 first, e.g. [1.0, 0.5, 0.25]). */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Set LODs", ScriptName = "set_lods;set_lo_ds"))
 	static FModelingResult SetLODs(const FString& AssetPath, const TArray<float>& PercentTrianglesPerLOD, bool bAutoComputeScreenSize = true, bool bSaveAsset = true);
+
+	/**
+	 * Generated-prop intake in one call: import a model file from an image-to-3D service (GLB/glTF, also FBX/OBJ), merge its
+	 * meshes into ONE StaticMesh at AssetPath, turn it by YawDeg about Z, scale it to real-world size, move the pivot, decimate
+	 * to MaxTriangles, cap its textures, build LODs and collision, and report what it did. Materials and textures land next to
+	 * the mesh as MI_<Name>_<i> / T_<Name>_<Role>; nothing else from the import is kept.
+	 * FitAxis: "Height" (Z extent = TargetSizeCm), "Width" (X), "Depth" (Y), "Longest", "Box" (stretch to TargetBoxCm, per axis),
+	 * "None". Pivot: "BottomCenter", "Center", "TopCenter" (hanging lamps), "None". Collision: "ConvexHulls" (MaxConvexHulls
+	 * pieces), "Box", "None", or any GenerateCollision method. LODPercents: comma list of LOD0 fractions ("1,0.5,0.25"; "" = one
+	 * LOD). Re-running with the same file and settings is a no-op (bUpToDate) unless bForce; a changed file or setting replaces
+	 * the asset in place, so placed actors keep working.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Intake Generated Mesh"))
+	static FModelingIntakeReport IntakeGeneratedMesh(const FString& SourceFile, const FString& AssetPath, float TargetSizeCm = 100.f,
+		const FString& FitAxis = TEXT("Height"), float YawDeg = 0.f, const FString& Pivot = TEXT("BottomCenter"), int32 MaxTriangles = 20000,
+		int32 MaxTextureSize = 1024, const FString& Collision = TEXT("ConvexHulls"), int32 MaxConvexHulls = 4, const FString& LODPercents = TEXT(""),
+		FVector TargetBoxCm = FVector::ZeroVector, bool bEnableNanite = false, bool bForce = false, bool bSaveAsset = true);
 
 	/** Bake maps from SourceHandle onto TargetHandle's UVs. BakeTypes: comma list of "TangentNormal", "ObjectNormal", "AmbientOcclusion", "Curvature", "Position", "BentNormal". Resolution 16..8192 (power of two). */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Bake Textures"))

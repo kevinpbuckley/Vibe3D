@@ -166,6 +166,17 @@ sp_a = eas.spawn_actor_from_object(unreal.load_asset(sm_path), unreal.Vector(0, 
 ah = call("load_mesh_from_actor", "Vibe3DModelingExerciseActor", True, 0).handle
 bake = call("bake_textures", u, s, "TangentNormal,AmbientOcclusion", 64, ROOT, "Exercise", 0, 1); assert bake.texture_paths
 
+# --- generated-prop intake (an OBJ written here stands in for a service's GLB: same call, same report)
+import os, tempfile
+obj = os.path.join(tempfile.gettempdir(), "vibe3d_exercise_prop.obj")
+with open(obj, "w") as f:
+    f.write("".join("v %g %g %g\n" % (x * 0.4, y * 0.3, z * 1.2) for x in (-1, 1) for y in (-1, 1) for z in (0, 1)))
+    f.write("f 1 3 4 2\nf 5 6 8 7\nf 1 2 6 5\nf 3 7 8 4\nf 1 5 7 3\nf 2 4 8 6\n")
+ir = call("intake_generated_mesh", obj, ROOT + "/Intake/SM_ExerciseProp", 90.0, "Height", 0.0, "BottomCenter", 5000, 1024, "Box", 1, "")
+assert abs((ir.bounds_max.z - ir.bounds_min.z) - 90.0) < 0.5 and abs(ir.bounds_min.z) < 0.5, ir.message
+assert svc.intake_generated_mesh(obj, ROOT + "/Intake/SM_ExerciseProp", 90.0, "Height", 0.0, "BottomCenter", 5000, 1024, "Box", 1, "").up_to_date
+os.remove(obj)
+
 # --- lofts, orientation, connected pieces
 lf = call("create_mesh").handle
 profile = [unreal.Vector2D(x, y) for x, y in ((0, 0), (0.3, 0.06), (0.7, 0.04), (1, 0), (0.7, -0.04), (0.3, -0.06))]

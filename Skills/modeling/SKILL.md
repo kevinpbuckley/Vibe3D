@@ -113,6 +113,7 @@ path given (see **Reference pages** at the end).
 | Voxel | `voxel_solidify(handle, grid_resolution)`, `voxel_morphology(handle, "Dilate|Contract|Open|Close", distance, grid_resolution)` |
 | UVs / normals / groups / materials / colors | `auto_uv(handle, "XAtlas|PatchBuilder", uv_layer)`, `project_uv(handle, "Planar|Box|Cylinder", transform, uv_layer, sel)`, `repack_uv(handle, uv_layer, resolution)`, `set_num_uv_layers`, `recompute_normals(handle, hard_angle_deg)`, `flip_normals`, `ensure_outward(handle)` (flip if the enclosed volume is negative), `compute_polygroups(handle, "Angle|UVIslands|Components|Polygons", crease_angle)`, `set_material_id(handle, sel, id)`, `remap_material_id(handle, from, to)`, `set_vertex_color(handle, sel, color)`, `set_polygroup(handle, sel, group_id=-1)`, `recompute_uvs(handle, uv_layer, "Polygroups|UVIslands", "SpectralConformal|Conformal|ExpMap", sel)`, `transform_uv(handle, uv_layer, sel, translation, scale, rotation_deg, origin)`, `layout_uv(handle, uv_layer, "Repack|Stack|Normalize|Transform", sel, resolution)`, `pack_uv_per_material(handle, uv_layer, resolution)`, `get_uv_stats(handle, uv_layer)` → islands/coverage/overlap/texel density, `world_to_uv(handle, point, uv_layer)` |
 | Transform | `transform_mesh(handle, transform)`, `translate_mesh`, `rotate_mesh`, `scale_mesh`, `recenter_mesh(handle, "Bounds|Base")` |
+| Generated-prop intake | `intake_generated_mesh(file, asset_path, target_size_cm, fit_axis="Height", yaw_deg=0, pivot="BottomCenter", max_triangles=20000, max_texture_size=1024, collision="ConvexHulls", max_convex_hulls=4, lod_percents="", target_box_cm=Vector(), enable_nanite=False, force=False)` → `ModelingIntakeReport` (import GLB/FBX/OBJ, merge, scale, pivot, decimate, cap textures, LODs, collision; see **Generated props**) |
 | Assets | `save_mesh_to_static_mesh(handle, path, replace_existing, enable_collision, enable_nanite)`, `save_mesh_to_skeletal_mesh(handle, path, skeleton_path="")` ("" creates `<path>_Skeleton` from the mesh bones), `set_asset_materials(asset_path, "/Game/M_A,/Game/M_B")`, `transfer_bone_weights(handle, source_skeletal_mesh_path)`, `smooth_bone_weights(handle, skeleton_path)`, `prune_bone_weights(handle, "bone,bone")`, `scale_bone_weights(handle, sel, "bone,bone", scale, receiver_bone="")` (regional weight repair; freed weight -> receiver or strongest other influence), `smooth_selection_bone_weights(handle, sel, iterations=3, alpha=0.5)` (feather weight seams), `inspect_bone_weights(handle, sel="")` (per-bone verts/avg/max, weight sums, max influences), `create_bones(handle, [ModelingBoneDef(name, parent_name, transform)])`, `bind_selection_to_bone(handle, sel, bone, weight=1)`, `list_bones(handle)` → per-bone vertex counts, `generate_collision(asset_path, "MinVolumeShapes|ConvexHulls|AlignedBoxes|OrientedBoxes|MinimalSpheres|Capsules|SweptHulls", max_hulls)`, `set_lods(asset_path, [percent_triangles...])`, `bake_textures(target_handle, source_handle, "TangentNormal,AmbientOcclusion,Curvature,ObjectNormal,Position,VertexColor,MaterialID,UVShell,Height", resolution, out_folder, base_name)`, `bake_texture_transfer(target, source, "T_A,T_B", resolution, out_folder, base_name)`, `create_noise_texture(asset_path, w, h, cells, octaves)`, `draw_on_texture(asset_path, "Line|Dots|Rect|Fill", uv_points, color, thickness_px, spacing_px)`; image import is Epic's `EditorToolset.TextureToolset.ImportFile` + `EditorToolset.ObjectToolset.SetProperties`, and placing an asset in the level is `EditorToolset.LevelToolset.AddToSceneFromAsset`; `load_mesh_from_actor` also reads skeletal / dynamic mesh actors |
 
 ## GeometryScript coverage
@@ -230,11 +231,60 @@ svc.set_asset_materials("/Game/Props/SM_Mug", "/Game/M_Ceramic,/Game/M_Coffee")
 - Without `set_asset_materials` every slot renders as the default grey — a mesh with correct ids
   still looks untextured in the viewport.
 
+## Generated props: image-to-3D model → game asset in one call
+
+Models from image-to-3D services (Hyper3D Rodin, Tripo, Tonetta Forge, ...) arrive at an arbitrary scale with
+the pivot in the middle, far too many triangles and 2-4K textures. `intake_generated_mesh` does the whole clean-up
+inside the editor — no Blender pass:
+
+```python
+r = svc.intake_generated_mesh("C:/gen/knife_tray/knife_tray.glb", "/Game/Props/KnifeTray/SM_KnifeTray",
+        target_size_cm=48.0, fit_axis="Width",        # the size you KNOW: a door's height, a tray's width
+        yaw_deg=0.0, pivot="BottomCenter",            # "TopCenter" for hanging lamps
+        max_triangles=12000, max_texture_size=1024,   # 1024 for web/mobile, 2048 for a hero prop
+        collision="ConvexHulls", max_convex_hulls=4,  # "Box" for simple shapes, "None" for decor nobody touches
+        lod_percents="1,0.5,0.25")                    # "" = one LOD (small or thin props)
+print(r.message)            # tris before/after, final size, scale, LODs, collision shapes, slots, textures
+print(r.bounds_min, r.bounds_max, r.textures)
+```
+
+What it does, in order: imports the file into a staging folder (GLB/glTF; FBX and OBJ work too), merges every
+mesh into ONE StaticMesh at the asset path, turns it `yaw_deg` about Z, scales it (`fit_axis`: `Height` = Z,
+`Width` = X, `Depth` = Y, `Longest`, `Box` = stretch to `target_box_cm` per axis, `None`), moves the pivot,
+decimates to `max_triangles`, caps every texture's Max Texture Size, builds LODs and simple collision, keeps the
+materials and textures next to the mesh as `MI_<Name>_<i>` / `T_<Name>_<Role>` (BaseColor, Normal, ...), and
+deletes everything else the import made.
+
+- **Idempotent.** The asset is tagged with the file's hash and the settings; the same call again returns
+  `up_to_date=True` without touching anything. A new file or a changed setting replaces the mesh **in place**, so
+  actors already placed keep working (`force=True` redoes it regardless).
+- **Read the report before placing.** `message` warns `stretched N%` when a `Box` fit distorted the proportions —
+  prefer a uniform fit on the one dimension you know. A source of 0 triangles, a skinned file (imports as a
+  SkeletalMesh) or an unknown `fit_axis` / `pivot` / `collision` fails with the reason.
+- **Thin parts and decimation.** Lattices, trusses, chain links and wire break apart when decimated: give them a
+  higher `max_triangles` and `lod_percents=""` rather than accepting holes.
+- **Where the front faces is the model's business.** Generators pick their own forward axis. Render the result
+  from several sides (or `CaptureEditorViewport` after placing it) and fix a wrong facing with `yaw_deg` in 90°
+  steps; then re-run the same call (it replaces in place).
+
+The full loop for a generated prop:
+
+1. **Reference sheet first.** Build an all-angle identity sheet of the prop (if a `reference-images` skill is
+   installed, use it) and look at it; re-roll the whole sheet when views disagree.
+2. **Generate from the sheet's views with multi-view input**, never from one image: a single three-quarter view
+   makes the generator invent every hidden side (a crystal shard came back as a cup).
+3. **`intake_generated_mesh`** with the real-world size.
+4. **Look at it**: a turnaround render (the reference-images skill's turnaround tooling, or captures from 4-8 sides)
+   next to the sheet. Fix facing or size by re-running intake with new settings.
+5. **Place it** with `EditorToolset.LevelToolset.AddToSceneFromAsset`; with the `BottomCenter` pivot the actor's
+   location is the point on the floor.
+
 ## Return types
 
 - `FModelingResult`: `success`, `message`, `handle`, `triangle_count`, `vertex_count`, `asset_path`.
 - `FModelingMeshInfo` (`get_mesh_info`): `handle`, `triangle_count`, `vertex_count`, `is_closed`, `open_border_edges`, `connected_components`, `bounds_min`, `bounds_max`, `surface_area`, `volume`, `num_uv_layers`, `has_vertex_colors`, `material_ids`.
 - `FModelingSplitResult` (`split_by_components`): `success`, `handles`.
+- `FModelingIntakeReport` (`intake_generated_mesh`): `success`, `message`, `asset_path`, `up_to_date`, `source_mesh_count`, `source_triangles`, `triangle_count`, `vertex_count`, `source_size`, `scale_applied`, `bounds_min`, `bounds_max`, `lod_count`, `collision_shapes`, `material_paths`, `textures`.
 
 ## Lofted solids (wings, fins, hulls)
 
