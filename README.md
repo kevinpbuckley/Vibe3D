@@ -28,10 +28,16 @@ but does not depend on it.
 ## What you get
 
 - **Toolset `Vibe3D.ModelingService`** on the MCP endpoint (`list_toolsets` / `describe_tools`) —
-  ~122 tools. Same functions from Python: `unreal.ModelingService.<snake_case>(...)`.
+  ~135 tools. Same functions from Python: `unreal.ModelingService.<snake_case>(...)`.
+- **Character and prop work, not only static modeling**: edit any skeletal mesh LOD in place (validated
+  write-back that keeps skeleton, slots and the other LODs), read a placed or PIE character as posed and
+  fit garments against the body (measure / push in / push out / hide), skin static accessories to the
+  surface under them and remap bones a leader drops at lower LODs, and turn an image-to-3D GLB into a
+  game-ready StaticMesh in one call (size, pivot, decimation, texture cap, LODs, collision, report).
 - **Skill `/Skills/Vibe3D/modeling`** (`Skills/modeling/SKILL.md`): the session model, frame semantics
   for sweeps and lofts, the texturing pipeline (islands → unwrap → pack → verify → masks → pixels →
-  detail normals), rigging control surfaces, gotchas. UE 5.9 discovers `<Plugin>/Skills/**/SKILL.md`
+  detail normals), rigging control surfaces, skeletal LOD round trips, garment fit, accessory re-skin,
+  generated-prop intake, a GeometryScript Python-name cheat sheet, gotchas. UE 5.9 discovers `<Plugin>/Skills/**/SKILL.md`
   natively and re-reads it on every `GetSkills` call, so edits need no reload or restart. Its sub-pages
   are linked from the skill's **Reference pages** section.
 - `get_dynamic_mesh(handle)` hands the mesh to any `unreal.GeometryScript_*` library for the long tail.
@@ -57,9 +63,11 @@ svc.generate_collision("/Game/Props/SM_Crate", "ConvexHulls", 4)
 
 ## Testing
 
-- Automation: `Automation RunTests Vibe3D.Modeling` (12 suites, self-provisioning; they write only under
-  `/Game/Developers/Vibe3DModelingTests` and delete it). The editor must be in the foreground — the
-  automation framework waits for an interactive frame rate.
+- Automation: `Automation RunTests Vibe3D.Modeling` (20 suites, self-provisioning; they write only under
+  `/Game/Developers/Vibe3DModelingTests` and `Saved/Vibe3DTests`, and delete what they made). In an
+  interactive editor it must be in the foreground — the automation framework waits for an interactive
+  frame rate. Headless works without that: `UnrealEditor-Cmd.exe <Project>.uproject
+  -ExecCmds="Automation RunTests Vibe3D.Modeling; Quit" -unattended -nopause -nullrhi`.
 - Coverage: run `Skills/modeling/scripts/exercise_all.txt` as editor Python — it calls every
   public function and ends with `RESULT: PASS`.
 - Agent prompts: `test_prompts/modeling/modeling_tests.md`.

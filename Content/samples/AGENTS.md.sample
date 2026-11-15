@@ -61,6 +61,11 @@ gives the exact Python signatures (`describe_tools` gives the MCP schemas, but i
 | Textures | `bake_textures` (normals, AO, curvature, position, VertexColor, MaterialID, UVShell, Height), `bake_texture_transfer`, `create_noise_texture`, `draw_on_texture`. Importing an image file is Epic's: `EditorToolset.TextureToolset.ImportFile`, then `EditorToolset.ObjectToolset.SetProperties` for SRGB / CompressionSettings |
 | Detail | `append_mesh_at_transforms`, `append_mesh_along_polyline`, `sample_surface_points`, `ray_cast`, `nearest_point`, `measure_distance` |
 | Rigging | `create_bones`, `bind_selection_to_bone`, `list_bones`, `transfer_bone_weights`, `smooth_bone_weights`, `prune_bone_weights` |
+| Skeletal LODs in place | `load_mesh_from_skeletal_mesh` (source model, remembers asset + LOD), `save_mesh_to_skeletal_mesh_lod` (validated write of ONE LOD; keeps skeleton, slots, other LODs), `inspect_skeletal_mesh` |
+| Garment fit (posed) | `load_mesh_from_skinned_component` (the pose a placed or PIE character has now), `measure_penetration`, `push_inside`, `push_outside`, `select_hidden_by`, `unpose_mesh` |
+| Accessories | `skin_to_surface` (weights from the skinned surface underneath; Surface / Inpaint / Rigid), `remap_lod_bones` (off bones the leader drops at lower LODs) |
+| Generated props | `intake_generated_mesh` (GLB/FBX/OBJ -> one StaticMesh: real-world size, pivot, decimation, texture cap, LODs, collision, report) |
+| Raw vertex access | `get_vertex_positions` / `set_vertex_positions` (plain Vector lists). For raw GeometryScript, read the skill's `geometryscript-cheatsheet.md` first: class names cannot be guessed |
 | Assets | `save_mesh_to_static_mesh`, `save_mesh_to_skeletal_mesh` (empty skeleton path creates `<Asset>_Skeleton`), `set_asset_materials`, `generate_collision`, `set_lods`. Placing the saved mesh in the level is Epic's: `EditorToolset.LevelToolset.AddToSceneFromAsset` (`name` sets the actor label) |
 
 ## 3. Rules that save a rebuild
@@ -77,5 +82,7 @@ gives the exact Python signatures (`describe_tools` gives the MCP schemas, but i
   on local normal/position, or bake at high resolution on a densely tessellated copy.
 - Big bakes (4K, 4 spp) take minutes: the MCP call may time out while the editor keeps working —
   log to a file and re-check rather than re-issuing the bake.
-- Tests: `Automation RunTests Vibe3D.Modeling` (editor must be in the foreground for the frame-rate
-  gate); `Skills/modeling/scripts/exercise_all.txt` calls every function and prints `RESULT: PASS`.
+- Tests: `Automation RunTests Vibe3D.Modeling` (an interactive editor must be in the foreground for the
+  frame-rate gate; headless `UnrealEditor-Cmd ... -ExecCmds="Automation RunTests Vibe3D.Modeling; Quit"
+  -unattended -nullrhi` has no gate); `Skills/modeling/scripts/exercise_all.txt` calls every function and
+  prints `RESULT: PASS`.

@@ -276,3 +276,33 @@ Delete the `ModelingTestCrate` actor, delete everything under `/Game/Developers/
 **Prompt:** "Add a rivet row every 8 cm along both wing leading edges and a 1 cm recessed panel line around the canopy on a detail copy of the fighter, then bake a 4K tangent normal map and AO from it onto the game mesh."
 
 **Expected:** `copy_mesh` → small sphere/cylinder handle for the rivet → `append_mesh_along_polyline` per leading edge → `cut_groove_along_polyline` around the canopy → `bake_textures(game, detail, "TangentNormal,AmbientOcclusion", 4096, …)`; the game mesh itself is untouched.
+
+## Prompt 16.1 — vertex arrays
+
+**Prompt:** "Lift every vertex of a 100 cm box above z = 50 by 10 cm without using any GeometryScript list type, then prove the top moved and the bottom did not."
+
+**Expected:** `get_vertex_positions(h)` → edit the Python list → `set_vertex_positions(h, positions)` → `get_mesh_info` bounds (min z 0, max z 110). No `GeometryScriptVectorList`, no guessed `GeometryScript_*` class.
+
+## Prompt 16.2 — generated prop intake
+
+**Prompt:** "Turn `C:/gen/lamp/lamp.glb` (an image-to-3D model) into `/Game/Developers/Vibe3DModelingTests/Lamp/SM_Lamp`: 180 cm tall, pivot on the floor, under 8k triangles, textures capped at 1024, convex-hull collision, three LODs. Then run the same request again."
+
+**Expected:** one `intake_generated_mesh(file, path, 180, "Height", 0, "BottomCenter", 8000, 1024, "ConvexHulls", 4, "1,0.5,0.25")`; the report shows ~180 cm height, triangle count ≤ 8000, 3 LODs, collision shapes > 0, textures `max 1024`, materials as `MI_Lamp_<i>`; the second run reports `up_to_date`. No Blender.
+
+## Prompt 16.3 — skeletal LOD round trip
+
+**Prompt:** "LOD 1 of `SK_Fin` (from 14.2) should sit 2 cm lower. Change only that LOD and show that the skeleton, the material slots and LOD 0 are unchanged."
+
+**Expected:** `inspect_skeletal_mesh` → `load_mesh_from_skeletal_mesh(path, 1)` (appending a LOD first with `save_mesh_to_skeletal_mesh_lod(h, path, 1)` if the asset has one LOD) → `translate_mesh` → `save_mesh_to_skeletal_mesh_lod(h)` (message: "original vertex order") → `inspect_skeletal_mesh` again with the same slots and LOD 0 counts.
+
+## Prompt 16.4 — garment fit in a pose
+
+**Prompt:** "On the placed character `BP_TestChar`, the `Body` pokes through the `Shirt` in its current pose. Measure it, push the skin under the shirt with a 3 mm margin without touching the head or hands, and write the result back into the body asset."
+
+**Expected:** `load_mesh_from_skinned_component` for both components (component space) → `measure_penetration(body, shirt, "Inside", 0.3)` (violations, max depth) → `push_inside` → `measure_penetration` shows 0 violations → `unpose_mesh(body)` → `save_mesh_to_skeletal_mesh_lod(body)`. The agent does not delete skin under an open garment.
+
+## Prompt 16.5 — accessory re-skin
+
+**Prompt:** "Make the static `SM_Tie` follow the shirt it lies on instead of riding on one bone, give it the body's skeleton, and make sure it does not streak when the body drops bones at lower LODs."
+
+**Expected:** the tie in body component space → shirt handle (asset or posed component) → `skin_to_surface(tie, shirt, "Surface", "", body_path)` → `save_mesh_to_skeletal_mesh(tie, path, body_skeleton)` → `remap_lod_bones(path, body_path)`; a badge or buckle uses `"Rigid"`.
