@@ -1778,7 +1778,7 @@ namespace
 	 * slot names (the engine writer leaves those empty, which can move sections onto the wrong material). Refused before
 	 * anything is touched: no weights, unweighted vertices, bones the skeleton lacks, bone or material indices out of range.
 	 */
-	bool WriteSkeletalLOD(int32 Handle, UDynamicMesh* Mesh, USkeletalMesh* SkeletalMesh, int32 LODIndex, FString& OutMessage)
+	bool WriteSkeletalLOD(int32 Handle, UDynamicMesh* Mesh, USkeletalMesh* SkeletalMesh, int32 LODIndex, FString& OutMessage, bool bKeepNormalSettings = true)
 	{
 		const FReferenceSkeleton& RefSkeleton = SkeletalMesh->GetRefSkeleton();
 		const int32 NumRefBones = RefSkeleton.GetRawBoneNum();
@@ -1890,8 +1890,11 @@ namespace
 
 		const FSkeletalMeshLODInfo* LODInfo = LODIndex < NumLODs ? SkeletalMesh->GetLODInfo(LODIndex) : nullptr;
 		FGeometryScriptCopyMeshToAssetOptions Options;
-		Options.bEnableRecomputeNormals = LODInfo ? LODInfo->BuildSettings.bRecomputeNormals : false;
-		Options.bEnableRecomputeTangents = LODInfo ? LODInfo->BuildSettings.bRecomputeTangents : false;
+		// bKeepNormalSettings false = the handle's normals and tangents are stored as they are (what save_mesh_to_skeletal_mesh
+		// has always done when replacing LOD0); true = the LOD keeps its own build settings, which may recompute them.
+		Options.bEnableRecomputeNormals = bKeepNormalSettings && LODInfo ? LODInfo->BuildSettings.bRecomputeNormals : false;
+		Options.bEnableRecomputeTangents = bKeepNormalSettings && LODInfo ? LODInfo->BuildSettings.bRecomputeTangents : false;
+		const bool bAssetRecomputesNormals = Options.bEnableRecomputeNormals;
 		Options.BoneHierarchyMismatchHandling = bHasBones ? EGeometryScriptBoneHierarchyMismatchHandling::RemapGeometryToReferenceSkeleton : EGeometryScriptBoneHierarchyMismatchHandling::DoNothing;
 		Options.bUseOriginalVertexOrder = bSameTopology;
 		Options.bReplaceMaterials = false;
@@ -1945,6 +1948,10 @@ namespace
 			FMath::Max(0, SkeletalMesh->GetLODNum() - 1),
 			bSameTopology ? TEXT(", original vertex order") : TEXT(""),
 			RestoredNames ? *FString::Printf(TEXT(", %d section slot name(s) restored"), RestoredNames) : TEXT(""));
+		if (bAssetRecomputesNormals)
+		{
+			OutMessage += TEXT("; this LOD's build settings recompute normals, so the handle's own normals are not used");
+		}
 		return true;
 	}
 }
@@ -2092,7 +2099,8 @@ FModelingResult UModelingService::SaveMeshToSkeletalMesh(int32 Handle, const FSt
 		if (!bReplaceExisting) { return Fail(Handle, FString::Printf(TEXT("%s already exists (pass replace_existing=True to overwrite LOD0)"), *AssetPath)); }
 		// Same validated writer as save_mesh_to_skeletal_mesh_lod: skeleton, slots, other LODs and section slot names kept.
 		FString WriteMessage;
-		if (!WriteSkeletalLOD(Handle, Mesh, SkeletalMesh, 0, WriteMessage)) { return Fail(Handle, WriteMessage); }
+		// The handle's normals and tangents are stored as they are, as this call has always done.
+		if (!WriteSkeletalLOD(Handle, Mesh, SkeletalMesh, 0, WriteMessage, false)) { return Fail(Handle, WriteMessage); }
 		Outcome = EGeometryScriptOutcomePins::Success;
 		What = WriteMessage;
 	}
@@ -2246,7 +2254,11 @@ namespace
 		}
 	}
 
-	/** A free name in Folder for Desired: an existing asset of that name that nothing references any more (an earlier intake's) is deleted and its name reused. */
+	/**
+	 * A free name in Folder for Desired. An existing asset of that name is deleted and its name reused only when an earlier
+	 * intake made it (it carries the intake tag) and nothing references it any more; anything else is left alone and the
+	 * new asset gets a numbered name.
+	 */
 	FString ClaimAssetName(const FString& Folder, const FString& Desired)
 	{
 		FString Name = Desired;
@@ -2254,7 +2266,9 @@ namespace
 		{
 			const FString Path = Folder / Name;
 			if (!UEditorAssetLibrary::DoesAssetExist(Path)) { return Name; }
-			if (UEditorAssetLibrary::FindPackageReferencersForAsset(Path, true).Num() == 0 && UEditorAssetLibrary::DeleteAsset(Path)) { return Name; }
+			UObject* Old = UEditorAssetLibrary::LoadAsset(Path);
+			const bool bOurs = Old && !UEditorAssetLibrary::GetMetadataTag(Old, IntakeSourceTag).IsEmpty();
+			if (bOurs && UEditorAssetLibrary::FindPackageReferencersForAsset(Path, true).Num() == 0 && UEditorAssetLibrary::DeleteAsset(Path)) { return Name; }
 			Name = FString::Printf(TEXT("%s_%d"), *Desired, Suffix);
 		}
 		return Name;
@@ -2326,6 +2340,11 @@ FModelingIntakeReport UModelingService::IntakeGeneratedMesh(const FString& Sourc
 	{
 		Existing = LoadAssetAs<UStaticMesh>(AssetPath);
 		if (!Existing) { return IntakeFail(AssetPath, FString::Printf(TEXT("%s exists but is not a StaticMesh"), *AssetPath)); }
+		// Only a mesh an earlier intake made is replaced without asking: anything else at this path is somebody's asset.
+		if (!bForce && UEditorAssetLibrary::GetMetadataTag(Existing, IntakeSourceTag).IsEmpty())
+		{
+			return IntakeFail(AssetPath, FString::Printf(TEXT("%s already exists and was not made by intake_generated_mesh: choose another asset path, or pass force=True to replace its geometry, materials, LODs and collision"), *AssetPath));
+		}
 	}
 	const FString Fingerprint = LexToString(FMD5Hash::HashFile(*File)) + FString::Printf(TEXT("|%g|%s|%g|%s|%d|%d|%s|%d|%s|%s|%d"),
 		TargetSizeCm, *Fit, YawDeg, *PivotMode, MaxTriangles, MaxTextureSize, *CollisionMethod, MaxConvexHulls, *LODPercents, *TargetBoxCm.ToString(), bEnableNanite ? 1 : 0);
@@ -2481,6 +2500,8 @@ FModelingIntakeReport UModelingService::IntakeGeneratedMesh(const FString& Sourc
 	}
 	if (Outcome != EGeometryScriptOutcomePins::Success || !Target) { return Abort(FString::Printf(TEXT("Writing %s failed: %s"), *AssetPath, *DebugText(Debug))); }
 	ReleaseMesh(Handle);
+	// Marked as intake's from here on, so a run that fails in a later step can simply be repeated.
+	UEditorAssetLibrary::SetMetadataTag(Target, IntakeSourceTag, File);
 
 	// ---- 6. keep the materials and textures (next to the mesh, stable names); drop the rest of the import
 	TArray<UObject*> ToSave = { Target };
@@ -2493,6 +2514,7 @@ FModelingIntakeReport UModelingService::IntakeGeneratedMesh(const FString& Sourc
 		if (UEditorAssetLibrary::RenameAsset(OldPackage, Folder / NewName))
 		{
 			MovedFrom.Add(OldPackage + TEXT(".") + Object->GetName());
+			UEditorAssetLibrary::SetMetadataTag(Object, IntakeSourceTag, File);   // lets a later intake recognise (and replace) its own leftovers
 			ToSave.Add(Object);
 		}
 	};
@@ -3751,7 +3773,12 @@ FModelingResult UModelingService::RemapLODBones(const FString& AssetPath, const 
 		if (Moved > 0)
 		{
 			FString WriteMessage;
-			if (!WriteSkeletalLOD(Handle, Mesh, SkeletalMesh, LOD, WriteMessage)) { ReleaseMesh(Handle); return Fail(-1, FString::Printf(TEXT("LOD %d: %s"), LOD, *WriteMessage)); }
+			if (!WriteSkeletalLOD(Handle, Mesh, SkeletalMesh, LOD, WriteMessage))
+			{
+				ReleaseMesh(Handle);
+				return Fail(-1, FString::Printf(TEXT("LOD %d: %s%s"), LOD, *WriteMessage,
+					TotalMoved > 0 ? TEXT(" (the LODs before it were re-weighted in memory and NOT saved: fix this LOD and run again, or reload the asset to discard)") : TEXT("")));
+			}
 			Lines += FString::Printf(TEXT("\n  LOD %d: %d vertices moved off bones the reference drops (%s)"), LOD, Moved, *FString::Join(Remapped, TEXT(", ")));
 		}
 		else
@@ -3865,7 +3892,7 @@ namespace
 		const int32 Rings = FMath::Clamp(SmoothIterations, 0, 20);
 
 		FDynamicMesh3 Other;
-		OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other = O; });
+		OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other.Copy(O, false, false, false, false); });   // positions and triangles only: a body LOD0 with all its attributes is tens of MB
 		const FDynamicMeshAABBTree3 Tree(&Other, true);
 
 		int32 Pushed = 0, Feathered = 0, Remaining = 0;
@@ -4077,7 +4104,7 @@ FModelingPenetrationReport UModelingService::MeasurePenetration(int32 Handle, in
 	FString Error;
 	if (!SelectionVertices(Handle, SelectionName, Mesh, Vids, Error)) { Report.Message = Error; return Report; }
 	FDynamicMesh3 Other;
-	OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other = O; });
+	OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other.Copy(O, false, false, false, false); });   // positions and triangles only: a body LOD0 with all its attributes is tens of MB
 	const FDynamicMeshAABBTree3 Tree(&Other, true);
 	TArray<FClearance> Clearance;
 	TArray<int32> Offending;
@@ -4133,7 +4160,7 @@ int32 UModelingService::SelectHiddenBy(int32 Handle, const FString& SelectionNam
 	UDynamicMesh* OtherMesh = FindMesh(OtherHandle);
 	if (!Mesh || !OtherMesh || Mesh == OtherMesh || SelectionName.IsEmpty()) { return -1; }
 	FDynamicMesh3 Other;
-	OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other = O; });
+	OtherMesh->ProcessMesh([&Other](const FDynamicMesh3& O) { Other.Copy(O, false, false, false, false); });   // positions and triangles only: a body LOD0 with all its attributes is tens of MB
 	const FDynamicMeshAABBTree3 Tree(&Other, true);
 	TArray<int32> Triangles;
 	Mesh->ProcessMesh([&](const FDynamicMesh3& M)

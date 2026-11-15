@@ -804,6 +804,25 @@ bool FVibe3DModelingIntakeTest::RunTest(const FString&)
 	TestEqual(TEXT("LODs cleared back to one"), Boxed.LODCount, 1);
 	TestFalse(TEXT("no duplicate material"), UEditorAssetLibrary::DoesAssetExist(Folder / TEXT("MI_TestProp_0_2")) || UEditorAssetLibrary::DoesAssetExist(Folder / TEXT("M_TestProp_0_2")));
 
+	// Somebody else's assets are not intake's to replace: a mesh at the target path needs force, and unreferenced assets
+	// that happen to have the names intake wants (no intake tag) are kept, the new ones get a numbered name.
+	const FString OtherFolder = FString(kModelingTestDir) / TEXT("IntakeOther");
+	const FString OtherPath = OtherFolder / TEXT("SM_TestProp");
+	TestTrue(TEXT("a hand-made mesh at the target path"), UModelingService::SaveMeshToStaticMesh(MakeBox(), OtherPath, true, true, false, false).bSuccess);
+	TArray<FString> Decoys;
+	for (const FString& Made : First.MaterialPaths) { Decoys.Add(OtherFolder / FPackageName::GetShortName(FPackageName::ObjectPathToPackageName(Made))); }
+	for (const FString& Made : First.Textures) { Decoys.Add(OtherFolder / FPackageName::GetShortName(FPackageName::ObjectPathToPackageName(Made.Left(Made.Find(TEXT(" ")))))); }
+	for (const FString& Decoy : Decoys) { TestTrue(FString::Printf(TEXT("decoy %s"), *Decoy), UModelingService::SaveMeshToStaticMesh(MakeBox(), Decoy, true, false, false, false).bSuccess); }
+	const FModelingIntakeReport Refused = UModelingService::IntakeGeneratedMesh(File, OtherPath, 75.f);
+	TestTrue(FString::Printf(TEXT("foreign mesh not replaced without force: %s"), *Refused.Message), !Refused.bSuccess && Refused.Message.Contains(TEXT("force")));
+	TestTrue(TEXT("foreign mesh untouched"), UModelingService::LoadMeshFromStaticMesh(OtherPath).TriangleCount == 12);
+	const FModelingIntakeReport Forced = UModelingService::IntakeGeneratedMesh(File, OtherPath, 75.f, TEXT("Height"), 0.f, TEXT("BottomCenter"),
+		200, 32, TEXT("None"), 1, TEXT(""), FVector::ZeroVector, false, true);
+	TestTrue(FString::Printf(TEXT("force replaces it: %s"), *Forced.Message), Forced.bSuccess && !Forced.bUpToDate);
+	for (const FString& Decoy : Decoys) { TestNotNull(*FString::Printf(TEXT("untagged %s kept"), *Decoy), Cast<UStaticMesh>(UEditorAssetLibrary::LoadAsset(Decoy))); }
+	for (const FString& Made : Forced.MaterialPaths) { TestFalse(FString::Printf(TEXT("new material got its own name (%s)"), *Made), Decoys.Contains(FPackageName::ObjectPathToPackageName(Made))); }
+	TestTrue(TEXT("once intake's, re-running needs no force"), UModelingService::IntakeGeneratedMesh(File, OtherPath, 60.f).bSuccess);
+
 	// Refusals.
 	TestFalse(TEXT("missing file rejected"), UModelingService::IntakeGeneratedMesh(File + TEXT(".missing"), AssetPath).bSuccess);
 	TestFalse(TEXT("unknown fit rejected"), UModelingService::IntakeGeneratedMesh(File, AssetPath, 50.f, TEXT("Diagonal")).bSuccess);
