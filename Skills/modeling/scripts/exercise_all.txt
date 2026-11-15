@@ -33,6 +33,10 @@ assert info.triangle_count == 12, info.triangle_count
 assert svc.get_dynamic_mesh(h) is not None; CALLED.add("get_dynamic_mesh")
 assert h in list(call("list_meshes"))
 assert call("release_mesh", copy_h)
+pos = list(call("get_vertex_positions", h)); assert len(pos) == 8, len(pos)   # plain Vectors, indexed by vertex ID
+call("set_vertex_positions", h, [p + unreal.Vector(0, 0, 1) for p in pos])
+assert abs(svc.get_mesh_info(h).bounds_min.z - 1.0) < 1e-3
+call("set_vertex_positions", h, pos)
 
 # --- primitives
 p = call("create_mesh").handle

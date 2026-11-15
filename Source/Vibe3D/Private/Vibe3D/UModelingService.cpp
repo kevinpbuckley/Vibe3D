@@ -622,6 +622,53 @@ UDynamicMesh* UModelingService::GetDynamicMesh(int32 Handle)
 	return FindMesh(Handle);
 }
 
+TArray<FVector> UModelingService::GetVertexPositions(int32 Handle)
+{
+	TArray<FVector> Out;
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	if (!Mesh)
+	{
+		UE_LOG(LogVibe3DModeling, Warning, TEXT("GetVertexPositions: %s"), *NoMesh(Handle).Message);
+		return Out;
+	}
+	Mesh->ProcessMesh([&Out](const FDynamicMesh3& M)
+	{
+		Out.SetNumZeroed(M.MaxVertexID());
+		for (const int32 Vid : M.VertexIndicesItr())
+		{
+			Out[Vid] = M.GetVertex(Vid);
+		}
+	});
+	return Out;
+}
+
+FModelingResult UModelingService::SetVertexPositions(int32 Handle, const TArray<FVector>& Positions)
+{
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	if (!Mesh) { return NoMesh(Handle); }
+	int32 MaxVid = 0;
+	int32 NumVerts = 0;
+	Mesh->ProcessMesh([&](const FDynamicMesh3& M) { MaxVid = M.MaxVertexID(); NumVerts = M.VertexCount(); });
+	if (Positions.Num() != MaxVid)
+	{
+		return Fail(Handle, FString::Printf(TEXT("Positions has %d entries but handle %d has %d vertex IDs (%d vertices%s): pass the list get_vertex_positions returned, edited in place"),
+			Positions.Num(), Handle, MaxVid, NumVerts, MaxVid != NumVerts ? TEXT(", with ID gaps") : TEXT("")));
+	}
+	int32 Moved = 0;
+	Mesh->EditMesh([&](FDynamicMesh3& M)
+	{
+		for (const int32 Vid : M.VertexIndicesItr())
+		{
+			if (!M.GetVertex(Vid).Equals(Positions[Vid], 0.0))
+			{
+				M.SetVertex(Vid, Positions[Vid]);
+				++Moved;
+			}
+		}
+	}, EDynamicMeshChangeType::DeformationEdit, EDynamicMeshAttributeChangeFlags::VertexPositions);
+	return Ok(Handle, Mesh, FString::Printf(TEXT("Set %d vertex positions (%d moved)"), NumVerts, Moved));
+}
+
 // =========================================================================
 // Primitives
 // =========================================================================

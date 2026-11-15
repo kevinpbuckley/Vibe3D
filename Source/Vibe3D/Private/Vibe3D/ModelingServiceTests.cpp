@@ -625,4 +625,34 @@ bool FVibe3DModelingRepairClosureTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVibe3DModelingVertexArraysTest, "Vibe3D.Modeling.VertexArrays", kModelingTestFlags)
+bool FVibe3DModelingVertexArraysTest::RunTest(const FString&)
+{
+	FScopedModelingSession Session;
+
+	// Round trip: read, move, write back; the layout is indexed by vertex ID.
+	const int32 H = MakeBox(100.f);
+	TArray<FVector> Positions = UModelingService::GetVertexPositions(H);
+	TestEqual(TEXT("one entry per vertex"), Positions.Num(), 8);
+	for (FVector& P : Positions) { P.Z += 10.0; }
+	const FModelingResult Set = UModelingService::SetVertexPositions(H, Positions);
+	TestTrue(FString::Printf(TEXT("set succeeds: %s"), *Set.Message), Set.bSuccess);
+	TestTrue(TEXT("bounds moved up"), FMath::IsNearlyEqual(UModelingService::GetMeshInfo(H).BoundsMin.Z, 10.0, 0.001));
+	TestFalse(TEXT("wrong length rejected"), UModelingService::SetVertexPositions(H, { FVector::ZeroVector }).bSuccess);
+	TestEqual(TEXT("unknown handle gives an empty list"), UModelingService::GetVertexPositions(4242).Num(), 0);
+
+	// A mesh with ID gaps keeps its slots: the list is MaxVertexID long and gap slots are ignored on write.
+	const int32 G = MakeBox(100.f);
+	UModelingService::AppendBox(G, FTransform(FVector(300, 0, 0)), 50.f, 50.f, 50.f);
+	UModelingService::SelectConnected(G, TEXT("first"), FVector(0, 0, 50));
+	UModelingService::DeleteFaces(G, TEXT("first"));
+	const FModelingMeshInfo GapInfo = UModelingService::GetMeshInfo(G);
+	TArray<FVector> GapPositions = UModelingService::GetVertexPositions(G);
+	TestTrue(TEXT("gap layout is at least as long as the vertex count"), GapPositions.Num() >= GapInfo.VertexCount);
+	for (FVector& P : GapPositions) { P.X -= 300.0; }
+	TestTrue(TEXT("gap layout accepted"), UModelingService::SetVertexPositions(G, GapPositions).bSuccess);
+	TestTrue(TEXT("remaining box moved to the origin"), FMath::IsNearlyEqual(UModelingService::GetMeshInfo(G).BoundsMin.X, -25.0, 0.001));
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS

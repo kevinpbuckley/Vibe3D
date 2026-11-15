@@ -7,9 +7,11 @@ vibe3d_classes:
 unreal_classes:
   - DynamicMesh
   - StaticMesh
-  - GeometryScript_MeshPrimitives
+  - GeometryScript_Primitives
   - GeometryScript_MeshBooleans
-  - GeometryScript_MeshUVs
+  - GeometryScript_UVs
+  - GeometryScript_MeshEdits
+  - GeometryScript_List
   - StaticMeshEditorSubsystem
 keywords:
   - modeling
@@ -88,6 +90,7 @@ a SkyLight and SkyAtmosphere. A dark studio can instead use movable RectLights a
 Use an unbound PostProcessVolume with fixed exposure for consistent material evaluation; tune
 exposure to the actual light intensities rather than treating one bias value as universal.
 
+Before any raw `unreal.GeometryScript_*` call, read [geometryscript-cheatsheet.md](geometryscript-cheatsheet.md).
 For modeled lettering and logos, read [modeled-lettering.md](modeled-lettering.md).
 For lit promotional images, high-resolution capture, or distributable asset packs, read
 [showcase-and-delivery.md](showcase-and-delivery.md). These sibling pages are not separate skill
@@ -99,6 +102,7 @@ path given (see **Reference pages** at the end).
 | Area | Functions |
 |---|---|
 | Session | `create_mesh()`, `load_mesh_from_static_mesh(path, lod=0)`, `load_mesh_from_skeletal_mesh(path, lod=0)`, `load_mesh_from_actor(label)`, `copy_mesh(handle)`, `release_mesh(handle)`, `release_all_meshes()`, `list_meshes()`, `get_mesh_info(handle)` |
+| Bulk vertex access | `get_vertex_positions(handle)` → plain list of `Vector` indexed by vertex ID, `set_vertex_positions(handle, positions)` (same layout back; no `GeometryScriptVectorList` conversion) |
 | Primitives (append into a handle) | `append_box`, `append_sphere`, `append_sphere_box`, `append_cylinder`, `append_cone`, `append_capsule`, `append_torus`, `append_rectangle`, `append_disc`, `append_stairs`, `append_curved_stairs`, `append_extrude_polygon(handle, transform, points2d, height)`, `append_revolve_polygon(handle, transform, points2d, radius, steps, degrees)`, `append_sweep_polyline(handle, transform, profile2d, path_transforms)` (open tube — prefer the next one for solids), `append_loft(handle, transform, closed_profile2d, frames)` (capped, always outward; frame scale = chord), `append_mesh(handle, other_handle, transform)`, `append_mesh_at_transforms(handle, other, [transforms])`, `append_mesh_along_polyline(handle, other, points, spacing, up)` |
 | Booleans | `boolean(target, tool, "Union|Subtract|Intersection", tool_transform)`, `self_union`, `plane_cut(handle, plane_transform, fill_holes)`, `mirror(handle, plane_transform, weld)`, `cut_groove_along_polyline(handle, points, width, depth, up)` |
 | Selections | `select_all(handle, name)`, `select_by_normal_angle(handle, name, normal, max_angle_deg)`, `select_in_box(handle, name, box_min, box_max)`, `select_in_sphere(handle, name, center, radius)`, `select_by_material_id(handle, name, material_id)`, `select_by_polygroup(handle, name, group_id)`, `select_connected(handle, name, point)` (whole connected piece nearest the point), `select_by_bone_weight(handle, name, "bone,bone", min_weight=0.25)` (vertices those bones drag — region finding for weight repair), `expand_contract_selection(handle, name, new_name, iterations, contract)`, `invert_selection(handle, name, new_name)`, `selection_count(handle, name)`, `selection_bounds(handle, name)` → `(min, max)` (Python drops the bool; an empty selection gives zero vectors), `clear_selections(handle)` |
@@ -118,9 +122,17 @@ Mode tool plus the asset plumbing. What it deliberately does not wrap, and how t
 
 | Not wrapped | Why | Reach it with |
 |---|---|---|
-| `GeometryScript_List*`, `VectorMath`, `Transform`, `Box`, `OrientedBox`, `Ray`, `SimplePolygon`, `PolyPath`, `PolygonList`, `PointSetSampling` | Pure math / container helpers, not editor operations | Call directly — they take plain values |
-| `MeshWeightMap`, `MeshSculptLayers`, `MeshGeodesic`, `TextureMap`, `VolumeTextureBake`, `EditorTextureMap` | Niche; would double the API for rare use | `mesh = svc.get_dynamic_mesh(handle)` then e.g. `unreal.GeometryScript_MeshGeodesics.create_surface_path(mesh, ...)` |
+| `GeometryScript_List`, `GeometryScript_VectorMath`, `GeometryScript_Transform`, `GeometryScript_Box`, `GeometryScript_OrientedBox`, `GeometryScript_Ray`, `GeometryScript_SimplePolygon`, `GeometryScript_PolyPath`, `GeometryScript_PolygonList`, `GeometryScript_PointSetSampling` | Pure math / container helpers, not editor operations | Call directly — they take plain values |
+| `GeometryScript_WeightMaps`, `GeometryScript_MeshSculptLayers`, `GeometryScript_MeshGeodesic`, `GeometryScript_TextureUtils`, `GeometryScript_VolumeBake`, `GeometryScript_EditorTextureUtils` | Niche; would double the API for rare use | `mesh = svc.get_dynamic_mesh(handle)` then e.g. `unreal.GeometryScript_MeshGeodesic.create_surface_path(mesh, ...)` |
 | Per-function option structs (remesh smoothing type, bake bit depth, XAtlas iterations, ...) | The wrappers fix sensible defaults | Same trick — the handle's `UDynamicMesh` is the live object; GeometryScript calls edit it in place and the next `svc.*` call sees the result |
+
+**Do not guess GeometryScript class names.** The Python class is the library's `ScriptName`, not its C++ name:
+`GeometryScript_MeshEdits` (not `MeshBasicEdits`), `GeometryScript_NewAssetUtils` (not `CreateNewAsset`),
+`GeometryScript_AssetUtils` (static and skeletal mesh read/write), `GeometryScript_Primitives`, `GeometryScript_UVs`.
+Arrays travel as typed wrapper structs (`GeometryScriptVectorList`, `GeometryScriptScalarList`, `GeometryScriptIndexList`,
+...) that are not interchangeable. Read [geometryscript-cheatsheet.md](geometryscript-cheatsheet.md) before the first raw
+GeometryScript call: every library's real Python name, which list type each function takes, and how out-parameters come
+back. For vertex positions you do not need a list type at all: `svc.get_vertex_positions(h)` / `svc.set_vertex_positions(h, positions)`.
 
 Discover any of them with `search_symbols` (e.g. pattern `GeometryScript_`), then `get_symbol` with
 `name="unreal.GeometryScript_<Library>"`.
@@ -400,6 +412,7 @@ Crisp markings (roundels, numbers) are still best as decals: `set_num_uv_layers(
 
 ## Reference pages
 
+- [geometryscript-cheatsheet.md](geometryscript-cheatsheet.md) — real Python class names of every GeometryScript library, the list type each function takes, out-parameter tuples
 - [modeled-lettering.md](modeled-lettering.md) — extruded logo lettering from font contours
 - [showcase-and-delivery.md](showcase-and-delivery.md) — lighting, high-resolution capture, asset packs
 - [scripts/exercise_all.txt](scripts/exercise_all.txt) — calls every ModelingService function and prints `RESULT: PASS`
