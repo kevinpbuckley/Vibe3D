@@ -933,4 +933,94 @@ bool FVibe3DModelingSkeletalLODTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVibe3DModelingAccessoryReskinTest, "Vibe3D.Modeling.AccessoryReskin", kModelingTestFlags)
+bool FVibe3DModelingAccessoryReskinTest::RunTest(const FString&)
+{
+	FScopedModelingSession Session;
+	if (UEditorAssetLibrary::DoesDirectoryExist(kModelingTestDir)) { UEditorAssetLibrary::DeleteDirectory(kModelingTestDir); }
+	const FString BodyPath = FString(kModelingTestDir) / TEXT("SK_ReskinBody");
+	TestTrue(TEXT("body saved"), UModelingService::SaveMeshToSkeletalMesh(MakeRiggedTwoMaterialMesh(), BodyPath, TEXT(""), true, false).bSuccess);
+	const int32 Body = UModelingService::LoadMeshFromSkeletalMesh(BodyPath, 0).Handle;
+
+	const auto BoneVertices = [](int32 Handle, const TCHAR* Bone)
+	{
+		for (const FModelingBoneInfo& Info : UModelingService::ListBones(Handle)) { if (Info.Name == Bone) { return Info.InfluencedVertices; } }
+		return -1;
+	};
+
+	// A plate lying on the flap follows the flap.
+	const int32 Plate = UModelingService::CreateMesh().Handle;
+	UModelingService::AppendBox(Plate, FTransform(FVector(0, 200, 50)), 20.f, 20.f, 2.f);
+	const FModelingResult Surface = UModelingService::SkinToSurface(Plate, Body);
+	TestTrue(FString::Printf(TEXT("surface skin: %s"), *Surface.Message), Surface.bSuccess);
+	TestEqual(TEXT("plate carries the body's two bones"), UModelingService::ListBones(Plate).Num(), 2);
+	TestEqual(TEXT("every plate vertex on the flap"), BoneVertices(Plate, TEXT("flap")), 8);
+	TestEqual(TEXT("none on the root"), BoneVertices(Plate, TEXT("root")), 0);
+
+	// Rigid: one bone for the whole piece, chosen from the surface or named.
+	const int32 Badge = UModelingService::CreateMesh().Handle;
+	UModelingService::AppendBox(Badge, FTransform(FVector(0, 0, 100)), 20.f, 20.f, 2.f);
+	const FModelingResult Rigid = UModelingService::SkinToSurface(Badge, Body, TEXT("Rigid"));
+	TestTrue(FString::Printf(TEXT("rigid picks the bone underneath: %s"), *Rigid.Message), Rigid.bSuccess && Rigid.Message.Contains(TEXT("'root'")));
+	TestEqual(TEXT("rigid binds every vertex"), BoneVertices(Badge, TEXT("root")), 8);
+	TestTrue(TEXT("rigid to a named bone"), UModelingService::SkinToSurface(Badge, Body, TEXT("Rigid"), TEXT("flap")).bSuccess);
+	TestEqual(TEXT("named bone took it all"), BoneVertices(Badge, TEXT("flap")), 8);
+	TestFalse(TEXT("unknown rigid bone rejected"), UModelingService::SkinToSurface(Badge, Body, TEXT("Rigid"), TEXT("nope")).bSuccess);
+	TestTrue(TEXT("inpaint mode"), UModelingService::SkinToSurface(Badge, Body, TEXT("Inpaint")).bSuccess);
+	TestTrue(TEXT("bones from an asset"), UModelingService::SkinToSurface(Plate, Body, TEXT("Surface"), TEXT(""), BodyPath).bSuccess);
+	TestFalse(TEXT("unskinned source rejected"), UModelingService::SkinToSurface(Plate, MakeBox()).bSuccess);
+	TestFalse(TEXT("unknown mode rejected"), UModelingService::SkinToSurface(Plate, Body, TEXT("Glue")).bSuccess);
+
+	// The skinned plate saves as a follower mesh on the body's skeleton.
+	USkeletalMesh* BodyAsset = LoadObject<USkeletalMesh>(nullptr, *BodyPath);
+	const FString PlatePath = FString(kModelingTestDir) / TEXT("SKM_Plate");
+	const FModelingResult PlateSaved = UModelingService::SaveMeshToSkeletalMesh(Plate, PlatePath, BodyAsset->GetSkeleton()->GetPathName(), true, false);
+	TestTrue(FString::Printf(TEXT("plate saved on the body skeleton: %s"), *PlateSaved.Message), PlateSaved.bSuccess);
+
+	// LOD bone remap: the reference (leader) drops flap_tip at LOD1; a follower weighted to flap_tip must move to flap.
+	const auto MakeThreeBoneMesh = [](const TCHAR* FlapBone)
+	{
+		const int32 H = UModelingService::CreateMesh().Handle;
+		UModelingService::AppendBox(H, FTransform::Identity, 100.f, 100.f, 100.f);
+		UModelingService::AppendBox(H, FTransform(FVector(0, 200, 0)), 50.f, 50.f, 50.f);
+		UModelingService::SelectConnected(H, TEXT("flap"), FVector(0, 200, 25));
+		FModelingBoneDef Root; Root.Name = TEXT("root");
+		FModelingBoneDef Flap; Flap.Name = TEXT("flap"); Flap.ParentName = TEXT("root"); Flap.Transform = FTransform(FVector(0, 175, 0));
+		FModelingBoneDef Tip; Tip.Name = TEXT("flap_tip"); Tip.ParentName = TEXT("flap"); Tip.Transform = FTransform(FVector(0, 225, 0));
+		UModelingService::CreateBones(H, { Root, Flap, Tip });
+		UModelingService::BindSelectionToBone(H, TEXT("flap"), FlapBone, 1.f);
+		return H;
+	};
+	const FString RefPath = FString(kModelingTestDir) / TEXT("SK_Leader");
+	const int32 Leader = MakeThreeBoneMesh(TEXT("flap"));
+	TestTrue(TEXT("leader saved"), UModelingService::SaveMeshToSkeletalMesh(Leader, RefPath, TEXT(""), true, false).bSuccess);
+	TestTrue(TEXT("leader LOD1 added"), UModelingService::SaveMeshToSkeletalMeshLOD(UModelingService::CopyMesh(Leader).Handle, RefPath, 1, false).bSuccess);
+	USkeletalMesh* LeaderAsset = LoadObject<USkeletalMesh>(nullptr, *RefPath);
+	LeaderAsset->Modify();
+	FBoneReference Removed;
+	Removed.BoneName = TEXT("flap_tip");
+	LeaderAsset->GetLODInfo(1)->BonesToRemove.Add(Removed);
+	LeaderAsset->PostEditChange();
+	FAssetCompilingManager::Get().FinishAllCompilation();
+	const FModelingResult LeaderInfo = UModelingService::InspectSkeletalMesh(RefPath);
+	AddInfo(LeaderInfo.Message);
+	TestTrue(TEXT("the leader drops a bone at LOD1"), LeaderInfo.Message.Contains(TEXT("LOD 1: source model")) && LeaderInfo.Message.Contains(TEXT("2 bone(s) used at runtime")));
+
+	const FString FollowerPath = FString(kModelingTestDir) / TEXT("SKM_Follower");
+	TestTrue(TEXT("follower saved"), UModelingService::SaveMeshToSkeletalMesh(MakeThreeBoneMesh(TEXT("flap_tip")), FollowerPath, TEXT(""), true, false).bSuccess);
+	const FModelingResult Remap = UModelingService::RemapLODBones(FollowerPath, RefPath, false);
+	TestTrue(FString::Printf(TEXT("remap: %s"), *Remap.Message), Remap.bSuccess && Remap.VertexCount == 8 && Remap.Message.Contains(TEXT("flap_tip->flap")));
+	AddInfo(Remap.Message);
+	const int32 Remapped = UModelingService::LoadMeshFromSkeletalMesh(FollowerPath, 0).Handle;
+	TestEqual(TEXT("nothing left on the dropped bone"), BoneVertices(Remapped, TEXT("flap_tip")), 0);
+	TestEqual(TEXT("its parent took over"), BoneVertices(Remapped, TEXT("flap")), 8);
+	TestEqual(TEXT("second remap is a no-op"), UModelingService::RemapLODBones(FollowerPath, RefPath, false).VertexCount, 0);
+	TestFalse(TEXT("missing reference rejected"), UModelingService::RemapLODBones(FollowerPath, TEXT("/Game/Developers/NoSuchMesh"), false).bSuccess);
+
+	FAssetCompilingManager::Get().FinishAllCompilation();
+	UModelingService::ReleaseAllMeshes();
+	TestTrue(TEXT("test folder removed"), UEditorAssetLibrary::DeleteDirectory(kModelingTestDir));
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS

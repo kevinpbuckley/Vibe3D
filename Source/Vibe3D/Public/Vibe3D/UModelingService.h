@@ -876,6 +876,28 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Smooth Selection Bone Weights"))
 	static FModelingResult SmoothSelectionBoneWeights(int32 Handle, const FString& SelectionName, int32 Iterations = 3, float Alpha = 0.5f);
 
+	/**
+	 * Skin a mesh (typically a static accessory: a tie, dog tags, a holster) to the surface it sits on, so it follows that
+	 * surface instead of riding rigidly on one bone. SourceHandle is a skinned session mesh in the SAME space as Handle
+	 * (load_mesh_from_skeletal_mesh for the reference pose, load_mesh_from_skinned_component for the pose as displayed).
+	 * Mode: "Surface" (weights of the closest surface point), "Inpaint" (closest point where the match is clear, smoothly
+	 * filled elsewhere: better for pieces that stand off the surface), "Rigid" (every vertex 100% on RigidBoneName, or on
+	 * the bone the surface under it is most weighted to). The result carries the source's bones, or those of
+	 * BonesFromSkeletalMesh (e.g. the body the accessory will follow as a leader-pose follower; weights are matched by name).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Skin To Surface"))
+	static FModelingResult SkinToSurface(int32 Handle, int32 SourceHandle, const FString& Mode = TEXT("Surface"), const FString& RigidBoneName = TEXT(""),
+		const FString& BonesFromSkeletalMesh = TEXT(""), int32 SmoothIterations = 0, float SmoothStrength = 0.f);
+
+	/**
+	 * Fix a skinned follower (accessory, garment) that streaks at lower LODs: for each of its LODs, every bone the reference
+	 * mesh (the leader, usually the body) does not keep at that LOD hands its weight to its nearest kept ancestor, then the
+	 * LOD is written back in place. The follower's last LOD also covers the reference's lower LODs. Reports, per LOD, which
+	 * bones were remapped and how many vertices moved.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Remap LOD Bones"))
+	static FModelingResult RemapLODBones(const FString& AssetPath, const FString& ReferenceSkeletalMeshPath, bool bSaveAsset = true);
+
 	/** Per-bone skin weight report over a selection ("" = whole mesh): influenced vertices, average/max weight per bone, weight-sum range, max influences. Verify a repair before saving. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Inspect Bone Weights"))
 	static FModelingResult InspectBoneWeights(int32 Handle, const FString& SelectionName = TEXT(""));

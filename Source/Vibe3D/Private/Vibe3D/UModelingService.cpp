@@ -3561,6 +3561,208 @@ FModelingResult UModelingService::InspectBoneWeights(int32 Handle, const FString
 		Counted, Stats.Num(), MinSum, MaxSum, MaxInfluences, OffNormalized, *Lines));
 }
 
+FModelingResult UModelingService::SkinToSurface(int32 Handle, int32 SourceHandle, const FString& Mode, const FString& RigidBoneName,
+	const FString& BonesFromSkeletalMesh, int32 SmoothIterations, float SmoothStrength)
+{
+	UDynamicMesh* Mesh = FindMesh(Handle);
+	if (!Mesh) { return NoMesh(Handle); }
+	UDynamicMesh* Source = FindMesh(SourceHandle);
+	if (!Source) { return Fail(Handle, FString::Printf(TEXT("No source session mesh with handle %d"), SourceHandle)); }
+	if (Source == Mesh) { return Fail(Handle, TEXT("SourceHandle must be a different mesh (the skinned surface underneath)")); }
+	const FString UseMode = Mode.TrimStartAndEnd();
+	const bool bRigid = UseMode.Equals(TEXT("Rigid"), ESearchCase::IgnoreCase);
+	const bool bInpaint = UseMode.Equals(TEXT("Inpaint"), ESearchCase::IgnoreCase);
+	if (!bRigid && !bInpaint && !UseMode.Equals(TEXT("Surface"), ESearchCase::IgnoreCase))
+	{
+		return Fail(Handle, FString::Printf(TEXT("Unknown mode '%s' (use Surface, Inpaint, Rigid)"), *Mode));
+	}
+	bool bSourceSkinned = false;
+	Source->ProcessMesh([&](const FDynamicMesh3& M)
+	{
+		bSourceSkinned = M.HasAttributes() && M.Attributes()->HasBones() && M.Attributes()->GetSkinWeightsAttribute(FSkeletalMeshAttributes::DefaultSkinWeightProfileName) != nullptr;
+	});
+	if (!bSourceSkinned) { return Fail(Handle, FString::Printf(TEXT("Source handle %d has no bones and weights: load it with load_mesh_from_skeletal_mesh / load_mesh_from_skinned_component"), SourceHandle)); }
+
+	UGeometryScriptDebug* Debug = NewDebug();
+	UDynamicMesh* BoneDonor = Source;
+	FString BonesNote = FString::Printf(TEXT("bones of handle %d"), SourceHandle);
+	if (!BonesFromSkeletalMesh.IsEmpty())
+	{
+		USkeletalMesh* Donor = LoadAssetAs<USkeletalMesh>(BonesFromSkeletalMesh);
+		if (!Donor) { return Fail(Handle, FString::Printf(TEXT("SkeletalMesh not found: %s"), *BonesFromSkeletalMesh)); }
+		BoneDonor = NewScratchMesh();
+		if (!CopyFromSkeletalMesh(Donor, BoneDonor, 0, Debug)) { return Fail(Handle, FString::Printf(TEXT("Could not read %s: %s"), *BonesFromSkeletalMesh, *DebugText(Debug))); }
+		BonesNote = FString::Printf(TEXT("bones of %s"), *BonesFromSkeletalMesh);
+	}
+	// The result's skeleton first, then weights matched to it by bone name.
+	UGeometryScriptLibrary_MeshBoneWeightFunctions::CopyBonesFromMesh(BoneDonor, Mesh, FGeometryScriptCopyBonesFromMeshOptions(), Debug);
+	FGeometryScriptTransferBoneWeightsOptions Options;
+	Options.TransferMethod = bInpaint ? ETransferBoneWeightsMethod::InpaintWeights : ETransferBoneWeightsMethod::ClosestPointOnSurface;
+	Options.OutputTargetMeshBones = EOutputTargetMeshBones::TargetBones;
+	Options.NumSmoothingIterations = FMath::Clamp(SmoothIterations, 0, 100);
+	Options.SmoothingStrength = FMath::Clamp(SmoothStrength, 0.f, 1.f);
+	UGeometryScriptLibrary_MeshBoneWeightFunctions::TransferBoneWeightsFromMesh(Source, Mesh, Options, FGeometryScriptMeshSelection(), Debug);
+	if (DebugHasErrors(Debug)) { return Fail(Handle, FString::Printf(TEXT("Weight transfer failed: %s"), *DebugText(Debug))); }
+
+	// Share of the total weight per bone: the report, and the rigid mode's choice.
+	TMap<int32, double> Share;
+	double Total = 0.0;
+	TArray<FName> BoneNames;
+	int32 RigidIndex = INDEX_NONE;
+	FString Error;
+	Mesh->EditMesh([&](FDynamicMesh3& M)
+	{
+		FSkinWeights* Skin = DefaultSkinWeights(M);
+		if (!Skin || !M.Attributes()->HasBones()) { Error = TEXT("Transfer produced no skin weights"); return; }
+		for (int32 i = 0; i < M.Attributes()->GetNumBones(); ++i) { BoneNames.Add(M.Attributes()->GetBoneNames()->GetValue(i)); }
+		FBoneWeights Weights;
+		for (const int32 Vid : M.VertexIndicesItr())
+		{
+			Skin->GetValue(Vid, Weights);
+			for (int32 k = 0; k < Weights.Num(); ++k) { Share.FindOrAdd(Weights[k].GetBoneIndex()) += Weights[k].GetWeight(); Total += Weights[k].GetWeight(); }
+		}
+		if (!bRigid) { return; }
+		if (!RigidBoneName.TrimStartAndEnd().IsEmpty())
+		{
+			RigidIndex = FindBoneIndexByName(M.Attributes(), FName(*RigidBoneName.TrimStartAndEnd()));
+			if (RigidIndex == INDEX_NONE) { Error = FString::Printf(TEXT("No bone named '%s' in the %s (see list_bones)"), *RigidBoneName, *BonesNote); return; }
+		}
+		else
+		{
+			double Best = -1.0;
+			for (const TPair<int32, double>& Pair : Share) { if (Pair.Value > Best) { Best = Pair.Value; RigidIndex = Pair.Key; } }
+		}
+		if (RigidIndex == INDEX_NONE) { Error = TEXT("No bone carries weight under the mesh"); return; }
+		const FBoneWeights One = FBoneWeights::Create({ FBoneWeight(static_cast<FBoneIndexType>(RigidIndex), 1.f) });
+		for (const int32 Vid : M.VertexIndicesItr()) { Skin->SetValue(Vid, One); }
+	});
+	if (!Error.IsEmpty()) { return Fail(Handle, Error); }
+
+	Share.ValueSort([](double A, double B) { return A > B; });
+	TArray<FString> Top;
+	for (const TPair<int32, double>& Pair : Share)
+	{
+		if (Top.Num() >= 6 || Total <= 0.0) { break; }
+		Top.Add(FString::Printf(TEXT("%s %.0f%%"), BoneNames.IsValidIndex(Pair.Key) ? *BoneNames[Pair.Key].ToString() : TEXT("?"), 100.0 * Pair.Value / Total));
+	}
+	return Ok(Handle, Mesh, bRigid
+		? FString::Printf(TEXT("Rigid: every vertex on '%s' (surface under it: %s); %d %s"), *BoneNames[RigidIndex].ToString(), *FString::Join(Top, TEXT(", ")), BoneNames.Num(), *BonesNote)
+		: FString::Printf(TEXT("%s weights from handle %d: %s; %d %s"), bInpaint ? TEXT("Inpainted") : TEXT("Closest-surface"), SourceHandle, *FString::Join(Top, TEXT(", ")), BoneNames.Num(), *BonesNote));
+}
+
+FModelingResult UModelingService::RemapLODBones(const FString& AssetPath, const FString& ReferenceSkeletalMeshPath, bool bSaveAsset)
+{
+	USkeletalMesh* SkeletalMesh = LoadAssetAs<USkeletalMesh>(AssetPath);
+	if (!SkeletalMesh) { return Fail(-1, FString::Printf(TEXT("SkeletalMesh not found: %s"), *AssetPath)); }
+	USkeletalMesh* Reference = LoadAssetAs<USkeletalMesh>(ReferenceSkeletalMeshPath);
+	if (!Reference) { return Fail(-1, FString::Printf(TEXT("Reference SkeletalMesh not found: %s (pass the mesh this one follows, e.g. the body)"), *ReferenceSkeletalMeshPath)); }
+	FAssetCompilingManager::Get().FinishAllCompilation();
+	const FSkeletalMeshRenderData* RefRender = Reference->GetResourceForRendering();
+	if (!RefRender || RefRender->LODRenderData.Num() == 0) { return Fail(-1, FString::Printf(TEXT("%s has no render data to read its LOD bone sets from"), *ReferenceSkeletalMeshPath)); }
+	const int32 NumRefLODs = RefRender->LODRenderData.Num();
+	const auto KeptAt = [&](int32 RefLOD)
+	{
+		TSet<FName> Names;
+		for (const FBoneIndexType Bone : RefRender->LODRenderData[FMath::Clamp(RefLOD, 0, NumRefLODs - 1)].RequiredBones)
+		{
+			Names.Add(Reference->GetRefSkeleton().GetBoneName(Bone));
+		}
+		return Names;
+	};
+
+	TSet<FName> RefBones;
+	for (int32 i = 0; i < Reference->GetRefSkeleton().GetRawBoneNum(); ++i) { RefBones.Add(Reference->GetRefSkeleton().GetBoneName(i)); }
+	const int32 NumLODs = SkeletalMesh->GetLODNum();
+	FString Lines;
+	int32 TotalMoved = 0;
+	for (int32 LOD = 0; LOD < NumLODs; ++LOD)
+	{
+		TSet<FName> Kept = KeptAt(LOD);
+		for (int32 RefLOD = LOD + 1; LOD == NumLODs - 1 && RefLOD < NumRefLODs; ++RefLOD) { Kept = Kept.Intersect(KeptAt(RefLOD)); }
+
+		const FModelingResult Loaded = LoadMeshFromSkeletalMesh(AssetPath, LOD);
+		if (!Loaded.bSuccess) { return Fail(-1, Loaded.Message); }
+		const int32 Handle = Loaded.Handle;
+		UDynamicMesh* Mesh = FindMesh(Handle);
+		TArray<FString> Remapped;
+		int32 Moved = 0;
+		Mesh->EditMesh([&](FDynamicMesh3& M)
+		{
+			FSkinWeights* Skin = DefaultSkinWeights(M);
+			if (!Skin) { return; }
+			// Bone index -> name / parent: the mesh's own bone list when it has one, else the asset's reference skeleton.
+			TArray<FName> Names;
+			TArray<int32> Parents;
+			if (M.Attributes()->HasBones())
+			{
+				for (int32 i = 0; i < M.Attributes()->GetNumBones(); ++i)
+				{
+					Names.Add(M.Attributes()->GetBoneNames()->GetValue(i));
+					Parents.Add(M.Attributes()->GetBoneParentIndices()->GetValue(i));
+				}
+			}
+			else
+			{
+				const FReferenceSkeleton& Ref = SkeletalMesh->GetRefSkeleton();
+				for (int32 i = 0; i < Ref.GetRawBoneNum(); ++i) { Names.Add(Ref.GetBoneName(i)); Parents.Add(Ref.GetParentIndex(i)); }
+			}
+			TArray<int32> Target;
+			Target.SetNum(Names.Num());
+			for (int32 i = 0; i < Names.Num(); ++i)
+			{
+				// Only bones the reference HAS but drops at this LOD; bones of the follower's own (cloth, props) are left alone.
+				Target[i] = i;
+				if (!RefBones.Contains(Names[i]) || Kept.Contains(Names[i])) { continue; }
+				int32 Walk = Parents.IsValidIndex(i) ? Parents[i] : INDEX_NONE;
+				while (Walk != INDEX_NONE && !Kept.Contains(Names[Walk])) { Walk = Parents.IsValidIndex(Walk) ? Parents[Walk] : INDEX_NONE; }
+				if (Walk != INDEX_NONE) { Target[i] = Walk; }
+			}
+			FBoneWeights Weights;
+			for (const int32 Vid : M.VertexIndicesItr())
+			{
+				Skin->GetValue(Vid, Weights);
+				bool bChanged = false;
+				TMap<int32, float> Merged;
+				for (int32 k = 0; k < Weights.Num(); ++k)
+				{
+					const int32 From = Weights[k].GetBoneIndex();
+					const int32 To = Target.IsValidIndex(From) ? Target[From] : From;
+					if (To != From && Weights[k].GetWeight() > 0.f)
+					{
+						bChanged = true;
+						Remapped.AddUnique(FString::Printf(TEXT("%s->%s"), *Names[From].ToString(), *Names[To].ToString()));
+					}
+					Merged.FindOrAdd(To) += Weights[k].GetWeight();
+				}
+				if (!bChanged) { continue; }
+				TArray<FBoneWeight> NewWeights;
+				for (const TPair<int32, float>& Pair : Merged) { NewWeights.Add(FBoneWeight(static_cast<FBoneIndexType>(Pair.Key), Pair.Value)); }
+				Skin->SetValue(Vid, FBoneWeights::Create(NewWeights));
+				++Moved;
+			}
+		});
+		if (Moved > 0)
+		{
+			FString WriteMessage;
+			if (!WriteSkeletalLOD(Handle, Mesh, SkeletalMesh, LOD, WriteMessage)) { ReleaseMesh(Handle); return Fail(-1, FString::Printf(TEXT("LOD %d: %s"), LOD, *WriteMessage)); }
+			Lines += FString::Printf(TEXT("\n  LOD %d: %d vertices moved off bones the reference drops (%s)"), LOD, Moved, *FString::Join(Remapped, TEXT(", ")));
+		}
+		else
+		{
+			Lines += FString::Printf(TEXT("\n  LOD %d: nothing weighted to a bone the reference drops"), LOD);
+		}
+		TotalMoved += Moved;
+		ReleaseMesh(Handle);
+	}
+	if (TotalMoved > 0) { SaveIf(bSaveAsset, AssetPath); }
+	FModelingResult R;
+	R.bSuccess = true;
+	R.AssetPath = AssetPath;
+	R.VertexCount = TotalMoved;
+	R.Message = FString::Printf(TEXT("%s against %s (%d LOD(s)): %d vertices re-weighted%s"), *AssetPath, *ReferenceSkeletalMeshPath, NumRefLODs, TotalMoved, *Lines);
+	return R;
+}
+
 FModelingResult UModelingService::SetAssetMaterials(const FString& AssetPath, const FString& MaterialPaths, bool bSaveAsset)
 {
 	TArray<FString> Paths;

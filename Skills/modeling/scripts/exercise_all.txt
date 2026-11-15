@@ -216,6 +216,13 @@ lod = call("load_mesh_from_skeletal_mesh", sk_path, 1).handle
 call("translate_mesh", lod, unreal.Vector(0, 0, 2))
 assert "original vertex order" in call("save_mesh_to_skeletal_mesh_lod", lod, "", -1, False).message   # "" / -1 = where it came from
 assert "LOD 1:" in call("inspect_skeletal_mesh", sk_path).message
+# accessory re-skin: a plate on the flap takes the flap's weights; rigid mode; LOD bone remap against a leader
+body = call("load_mesh_from_skeletal_mesh", sk_path, 0).handle
+plate = call("create_mesh").handle; call("append_box", plate, T(unreal.Vector(0, 200, 50)), 20, 20, 2)
+call("skin_to_surface", plate, body, "Surface", "", "", 0, 0.0)
+assert [b.influenced_vertices for b in svc.list_bones(plate) if str(b.name) == "flap"] == [8]
+call("skin_to_surface", plate, body, "Rigid", "flap", "", 0, 0.0)
+assert "re-weighted" in call("remap_lod_bones", sk_path, sk_path, False).message   # against itself: nothing dropped, still a valid report
 
 # --- UV control: polygroup islands, conformal unwrap, packing, verification
 uv = call("create_mesh").handle
