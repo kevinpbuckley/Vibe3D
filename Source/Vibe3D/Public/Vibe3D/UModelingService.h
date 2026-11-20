@@ -879,8 +879,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Sample Surface Points"))
 	static TArray<FTransform> SampleSurfacePoints(int32 Handle, float SamplingRadius = 10.f, int32 MaxSamples = 0);
 
-	/** Bounding box of a selection. Returns false when the selection is empty. */
+	/** Bounding box of a selection (Min, Max). IsValid is false, with a zero box, when the selection is empty or unknown. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Selection Bounds"))
+	static FBox SelectionBounds(int32 Handle, const FString& SelectionName);
+
+	/** C++ form of SelectionBounds: false when the selection is empty. Not reflected: an output reference would become a
+	 *  required input of the MCP tool and its value would be dropped. */
 	static bool SelectionBounds(int32 Handle, const FString& SelectionName, FVector& OutMin, FVector& OutMax);
 
 	/** Select every triangle in one polygroup (see ComputePolygroups / GetMeshInfo). */
@@ -1054,8 +1058,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "Get UV Stats", ScriptName = "get_uv_stats"))
 	static FModelingUVStats GetUVStats(int32 Handle, int32 UVLayer = 0, int32 GridResolution = 512);
 
-	/** UV coordinate of the surface point nearest to a mesh-space position (where a marking lands on the texture). Returns false when the mesh has no UVs there. */
+	/** UV coordinate of the surface point nearest to a mesh-space position (where a marking lands on the texture).
+	 *  Raises a script error (a Python exception, an MCP tool error) when the mesh has no UVs there. */
 	UFUNCTION(BlueprintCallable, Category = "Vibe3D|Modeling", meta = (AICallable, DisplayName = "World To UV", ScriptName = "world_to_uv"))
+	static FVector2D WorldToUV(int32 Handle, FVector Point, int32 UVLayer = 0);
+
+	/** C++ form of WorldToUV: false when the mesh has no UVs there. Not reflected: an output reference would become a
+	 *  required input of the MCP tool and its value would be dropped. */
 	static bool WorldToUV(int32 Handle, FVector Point, int32 UVLayer, FVector2D& OutUV);
 
 	// =====================================================================

@@ -75,7 +75,8 @@ assert call("select_by_polygroup", c, "group0", 1) >= 0
 call("expand_contract_selection", c, "top", "top_grown", 1, False)
 call("invert_selection", c, "top", "not_top")
 assert call("selection_count", c, "top") == 2
-mn, mx = svc.selection_bounds(c, "top"); CALLED.add("selection_bounds"); assert mx.z > 99, mx   # Python drops the bool; empty selection -> zero vectors
+box = svc.selection_bounds(c, "top"); CALLED.add("selection_bounds"); assert box.is_valid and box.max.z > 99, box   # a Box; is_valid is False for an empty or unknown selection
+assert not svc.selection_bounds(c, "no_such_selection").is_valid
 call("inset_faces", c, "top", 5.0)
 call("select_by_normal_angle", c, "top", unreal.Vector(0, 0, 1), 5.0)
 call("extrude_faces", c, "top", -3.0)
@@ -253,7 +254,8 @@ st = call("get_uv_stats", uv, 0, 256)
 assert st.success and st.num_islands == 6 and st.overlap_fraction < 0.01, (st.num_islands, st.overlap_fraction)
 call("transform_uv", uv, 0, "top", unreal.Vector2D(0.05, 0.0), unreal.Vector2D(1, 1), 0.0, unreal.Vector2D(0.5, 0.5))
 call("pack_uv_per_material", uv, 0, 512)
-assert call("world_to_uv", uv, unreal.Vector(0, 0, 100), 0) is not None, "world_to_uv should find the top face"
+top_uv = call("world_to_uv", uv, unreal.Vector(0, 0, 100), 0)   # a Vector2D; raises when the mesh has no UVs there
+assert -0.01 <= top_uv.x <= 1.01 and -0.01 <= top_uv.y <= 1.01, top_uv
 
 # --- bakes and image tools
 call("set_vertex_color", uv, "", unreal.LinearColor(1, 0, 0, 1))

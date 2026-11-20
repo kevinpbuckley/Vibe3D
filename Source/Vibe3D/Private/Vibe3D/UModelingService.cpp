@@ -3,6 +3,7 @@
 #include "Vibe3D/UModelingService.h"
 
 #include "UDynamicMesh.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "GeometryScript/GeometryScriptTypes.h"
@@ -2868,6 +2869,17 @@ TArray<FTransform> UModelingService::SampleSurfacePoints(int32 Handle, float Sam
 	return Samples;
 }
 
+FBox UModelingService::SelectionBounds(int32 Handle, const FString& SelectionName)
+{
+	FVector Min = FVector::ZeroVector;
+	FVector Max = FVector::ZeroVector;
+	FBox Bounds(Min, Max);
+	Bounds.IsValid = SelectionBounds(Handle, SelectionName, Min, Max) ? 1 : 0;
+	Bounds.Min = Min;
+	Bounds.Max = Max;
+	return Bounds;
+}
+
 bool UModelingService::SelectionBounds(int32 Handle, const FString& SelectionName, FVector& OutMin, FVector& OutMax)
 {
 	OutMin = OutMax = FVector::ZeroVector;
@@ -4471,6 +4483,18 @@ FModelingUVStats UModelingService::GetUVStats(int32 Handle, int32 UVLayer, int32
 	Stats.Message = FString::Printf(TEXT("%d island(s), %.0f%% of 0-1 covered, %.1f%% overlapping, %d unset triangle(s), %.2f texels/cm at 1K"),
 		Stats.NumIslands, Stats.Coverage * 100.f, Stats.OverlapFraction * 100.f, Stats.NumUnsetTriangles, Stats.TexelsPerCmAt1K);
 	return Stats;
+}
+
+FVector2D UModelingService::WorldToUV(int32 Handle, FVector Point, int32 UVLayer)
+{
+	FVector2D UV = FVector2D::ZeroVector;
+	if (!WorldToUV(Handle, Point, UVLayer, UV))
+	{
+		UKismetSystemLibrary::RaiseScriptError(FString::Printf(
+			TEXT("WorldToUV: no UV at that point (handle %d is unknown, UV layer %d does not exist, or the nearest triangle has no UVs in that layer)"),
+			Handle, UVLayer));
+	}
+	return UV;
 }
 
 bool UModelingService::WorldToUV(int32 Handle, FVector Point, int32 UVLayer, FVector2D& OutUV)
